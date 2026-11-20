@@ -128,6 +128,7 @@ Push-to-talk is off until you turn it on with `(setopt earwig-push-to-talk t)`. 
 
 - **Text appears as you talk**, grey until a pause, then final. A command said after "okay" shows in blue and runs at the next pause.
 - **Dictation follows point:** click somewhere else, or say "okay, go to top", and what you say next goes there.
+- **A voice command runs only when you stop it.** Forgot to tap Cmd-f again? Nothing happens, as Earwig is still listening. To have a pause end the command instead, set `(setopt earwig-command-auto-stop 1.5)`: recording stops after 1.5 seconds of silence once what you said is a complete command.
 - **Chain commands** with "and then": "select last sentence and then format bold". End with "never mind" or "cancel" and nothing runs.
 - **Undo:** each command, and each stretch of dictation, is one undo step. "scratch that" takes back the last dictation.
 
@@ -225,6 +226,7 @@ Run `M-x earwig-check-setup` first. Beyond what it finds:
 | The first words are cut off             | Install sox; ffmpeg starts recording late                                                               |
 | Holding the space bar only types spaces | Turn on `earwig-push-to-talk`, and turn off press and hold (Setup, step 3)                              |
 | The same word keeps coming out wrong    | Fix it once with Cmd-e; Earwig remembers it                                                             |
+| A voice command does nothing            | It runs only once you stop it: tap Cmd-f again, or set `earwig-command-auto-stop` to have a pause stop it |
 | A command isn't recognized              | Say "what can I say"; a command has to match the whole phrase                                           |
 
 The manual has [more](docs/manual.md#troubleshooting), on streaming and push-to-talk timing among others.
