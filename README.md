@@ -15,6 +15,10 @@ This README covers installing, setting up and using Earwig. The [manual](docs/ma
 > [!NOTE]
 > [Claude](https://claude.ai) wrote most of it, while I spent decades in software engineering learning what to make, what to keep, and what to throw away. ¯\\_(ツ)\_/¯
 
+## Demo
+
+https://github.com/user-attachments/assets/c98e9aa4-047d-4ef0-beb1-6defd6b9202d
+
 ## Features
 
 - **Dictation** into any buffer, cleaned up as it goes in: filler words like "uhm" dropped, spoken punctuation turned into symbols, capitals and spacing fitted to where the text goes.
