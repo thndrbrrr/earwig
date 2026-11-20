@@ -155,7 +155,7 @@ pass on what was said, like a prompt.")
 PATTERN is a regexp matched, ignoring case, against the whole command
 text; the first match wins.  FUNCTION is called with PATTERN's groups as
 arguments; a command without groups is called interactively.  HELP is
-shown by \"what can I say\".  `earwig-extra-commands' come first.")
+shown by \"what can I say\".  `earwig-extra-commands' are tried first.")
 
 ;;;; Matching
 
@@ -531,18 +531,41 @@ With `consult-line' if it's installed, else with isearch."
 
 ;;;; Help
 
+(defun earwig--help-rows (rows)
+  "Print ROWS of (LEFT RIGHT) as two indented columns."
+  (dolist (row rows)
+    (let ((left (car row)) (right (cadr row)))
+      (princ (cond ((string-empty-p right) (format "  %s\n" left))
+                   ((> (length left) 30) (format "  %s\n  %-30s %s\n" left "" right))
+                   (t (format "  %-30s %s\n" left right)))))))
+
 (defun earwig-cmd-help ()
-  "List the voice commands."
+  "List the voice commands.
+How to chain and cancel them and what TARGET can be come first, then
+Earwig's commands, then `earwig-extra-commands'."
   (with-help-window "*Voice commands*"
-    (princ (format "Voice commands (%s%s):\n\n"
+    (princ (format "Voice commands (%s%s)\n\n"
                    (mapconcat #'identity (earwig--mode-keys 'command) " or ")
                    (if (and earwig-wake-word-commands earwig-wake-words)
                        (format ", or say \"%s\" while dictating" (car earwig-wake-words))
                      "")))
-    (when earwig-chain-words
-      (princ (format "  COMMAND %s COMMAND ...   (one after another)\n\n" (car earwig-chain-words))))
-    (dolist (command (append earwig-extra-commands earwig-commands))
-      (princ (format "  %s\n" (nth 2 command))))))
+    (earwig--help-rows
+     (append
+      (when earwig-chain-words
+        (list (list (format "COMMAND %s COMMAND ..." (car earwig-chain-words))
+                    "one after another")))
+      (when earwig-cancel-words
+        (list (list (format "COMMAND ..., %s" (car earwig-cancel-words))
+                    "runs nothing")))))
+    (princ "\nTARGET, what an editing command acts on:\n\n")
+    (earwig--help-rows earwig-edit-targets-help)
+    (princ "\nCommands:\n\n")
+    (dolist (command earwig-commands)
+      (princ (format "  %s\n" (nth 2 command))))
+    (when earwig-extra-commands
+      (princ "\nYour commands (`earwig-extra-commands', tried first):\n\n")
+      (dolist (command earwig-extra-commands)
+        (princ (format "  %s\n" (nth 2 command)))))))
 
 (provide 'earwig-commands)
 ;;; earwig-commands.el ends here

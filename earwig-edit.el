@@ -986,13 +986,26 @@ line put in, after its indentation, as with evil's paste."
   (delete-horizontal-space t)
   (newline (if (equal (downcase what) "paragraph") 2 1)))
 
+(defconst earwig-edit-targets-help
+  '(("[the] selection"                 "the selection; also when TARGET is left out")
+    ("that | this"                     "the selection, or else the last dictation")
+    ("[this] word | sentence | paragraph | line"
+                                       "the one around the cursor")
+    ("last | next [N] words | sentences | paragraphs | lines"
+                                       "before or after the cursor")
+    ("the whole buffer"                "")
+    ("WORDS"                           "the nearest place they're said")
+    ("[from] A until | through B"      "from words A to words B")
+    ("WORDS in TARGET"                 "WORDS, looked for only in TARGET")
+    (""                                "(\"meow in the last two sentences\")"))
+  "What \"what can I say\" shows for TARGET, as (SPOKEN EXPLANATION).")
+
 (defconst earwig-edit-commands
   `((,(concat "\\(" (regexp-opt (cl-mapcan (lambda (v) (copy-sequence (cdr v)))
                                            earwig--edit-verbs))
               "\\)\\(?: \\(.+\\)\\)?")
      earwig-cmd-edit
-     "select | delete | cut | copy | capitalize | uppercase | lowercase | title case TARGET
-      TARGET: that | this line | last [N] words | WORDS [in TARGET] | [from] A until B")
+     "select | delete | cut | copy | capitalize | uppercase | lowercase | title case TARGET")
     (,(concat "format \\("
               (regexp-opt (cl-mapcan (lambda (s) (copy-sequence (cdr s))) earwig--format-styles))
               "\\)\\(?: \\(.+\\)\\)?")
@@ -1003,7 +1016,7 @@ line put in, after its indentation, as with evil's paste."
     ("\\(next\\|previous\\) \\(?:one\\|match\\)" earwig-cmd-next-match
      "next | previous one    (after select WORDS or go before/after)")
     ("go \\(before\\|after\\) \\(.+\\)" earwig-cmd-go
-     "go before | after WORDS")
+     "go before | after WORDS [in TARGET]")
     ("go to \\(?:the \\)?\\(start\\|beginning\\|end\\) of \\(?:the \\|this \\)?\\(line\\|sentence\\|paragraph\\)"
      earwig-cmd-go-edge
      "go to [the] start | end of line | sentence | paragraph")
