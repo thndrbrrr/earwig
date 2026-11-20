@@ -478,9 +478,66 @@ Learned ones are saved to a temporary `custom-file'."
     (should-not messages)))
 
 (ert-deftest earwig-test-parse-number ()
-  (should (equal (earwig--parse-number "one hundred and five") 105))
-  (should (equal (earwig--parse-number "42") 42))
-  (should-not (earwig--parse-number "lots")))
+  (dolist (case '(("42" . 42) ("forty two" . 42) ("Forty-Two" . 42) ("forty 2" . 42)
+                  ("one hundred and five" . 105) ("one hundred five" . 105)
+                  ("a hundred" . 100) ("hundred" . 100) ("a thousand and one" . 1001)
+                  ("two thousand and five" . 2005) ("two thousand 5" . 2005)
+                  ("one hundred thousand" . 100000) ("twenty one hundred" . 2100)
+                  ("nineteen hundred eighty four" . 1984)
+                  ("one million two hundred thousand and three" . 1200003)
+                  ("2 million" . 2000000) ("42 thousand" . 42000)
+                  ("zero" . 0) ("42." . 42) ("007" . 7)
+                  ;; Separators, as Orukeet writes them, or after `earwig--command-text'
+                  ("1,000" . 1000) ("1 000" . 1000) ("1,234,567" . 1234567)
+                  ;; Said digit by digit or in parts
+                  ("one one" . 11) ("1, 1" . 11) ("two three" . 23) ("1 05" . 105)
+                  ("nineteen eighty-four" . 1984) ("nineteen oh five" . 1905)
+                  ("twenty twenty" . 2020) ("five twenty" . 520)
+                  ;; Decimals
+                  ("two point five" . 2.5) ("2.5" . 2.5) (".5" . 0.5) ("point five" . 0.5)
+                  ("three point one four" . 3.14) ("two decimal zero five" . 2.05)
+                  ("2.0" . 2.0)))
+    (should (equal (cons (car case) (earwig-parse-number (car case))) case)))
+  (dolist (case '(("lots" . "\"lots\" is no number")
+                  ("minus three" . "\"minus\" is no number")
+                  ("-3" . "\"-3\" is no number")
+                  ("third" . "\"third\" is no number")
+                  ("" . "there's no number")
+                  ("five hundred hundred" . "\"hundred\" after \"hundred\"")
+                  ("one thousand thousand" . "\"thousand\" after \"thousand\"")
+                  ("two thousand hundred" . "\"hundred\" after \"thousand\"")
+                  ("one and two" . "\"and\" after \"one\"")
+                  ("one hundred and" . "nothing after \"and\"")
+                  ("one hundred and and five" . "\"and\" after \"and\"")
+                  ("a five" . "\"a\" before \"five\"")
+                  ("five a hundred" . "\"a\" goes only first")
+                  ("two point" . "nothing after \"point\"")
+                  ("1.2.3" . "a second decimal point")
+                  ("1.5 million" . "\"million\" after a decimal point")))
+    (let ((err (should-error (earwig-parse-number (car case)) :type 'user-error)))
+      (should (string-match-p (concat "\\`Can.t parse number \"" (regexp-quote (car case))
+                                      "\": " (regexp-quote (cdr case)))
+                              (error-message-string err)))))
+  ;; WHOLE refuses decimals; NOERROR returns nil
+  (should (equal (error-message-string
+                  (should-error (earwig-parse-number "two point five" t) :type 'user-error))
+                 "Not a whole number: \"two point five\""))
+  (should (equal (earwig-parse-number "two" t) 2))
+  (should-not (earwig-parse-number "lots" nil t))
+  (should-not (earwig-parse-number "2.5" t t))
+  ;; The match data stays, for the groups after the number
+  (should (string-match "\\(.+\\) \\(words\\)" "twenty one words"))
+  (earwig-parse-number "twenty one")
+  (should (equal (match-string 2 "twenty one words") "words"))
+  ;; Commands say why
+  (with-temp-buffer
+    (insert "a\nb\nc\n")
+    (should (equal (error-message-string
+                    (should-error (earwig-cmd-goto-line "lots") :type 'user-error))
+                   "Can’t parse number \"lots\": \"lots\" is no number"))
+    (should-error (earwig-cmd-goto-line "two point five") :type 'user-error)
+    (earwig-cmd-goto-line "two")
+    (should (= (line-number-at-pos) 2))))
 
 (ert-deftest earwig-test-wake-word ()
   (should (equal (earwig--strip-wake-word "Okay, delete that") "delete that"))
@@ -530,6 +587,15 @@ Learned ones are saved to a temporary `custom-file'."
     (earwig-test-buffer "One two. Three four. Five six|." #'fundamental-mode
       (setq range (earwig-part-range "Last two sentences")))
     (should (equal range '(10 . 31)))
+    ;; Counts of more than one word, in parts, and decimals
+    (earwig-test-buffer "a b c d e f g h i j k l m n o p q r s t u v w x y|" #'fundamental-mode
+      (should (equal (earwig-part-range "last twenty one words") '(9 . 50)))
+      (should (equal (earwig-part-range "last one one words") '(29 . 50)))
+      (should (equal (error-message-string
+                      (should-error (earwig-part-range "last two point five words")
+                                    :type 'user-error))
+                     "Not a whole number: \"two point five\""))
+      (should-error (earwig-part-range "last few words") :type 'user-error))
     (earwig-test-buffer "One two. Three| four." #'fundamental-mode
       (setq range (list (earwig-part-range "the whole buffer")
                         (earwig-part-range "three four"))))

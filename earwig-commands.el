@@ -28,8 +28,9 @@
 ;; with `earwig-wake-word-commands', what's said after a wake word
 ;; while dictating.  Commands of your own go in
 ;; `earwig-extra-commands', which are tried first; `earwig-with-input',
-;; `earwig-downcase-first-word', `earwig-raw-command', for parts of the
-;; buffer `earwig-part-range' (earwig-edit.el), and for dates
+;; `earwig-downcase-first-word', `earwig-raw-command', for numbers
+;; `earwig-parse-number', for parts of the buffer `earwig-part-range'
+;; (earwig-edit.el), and for dates
 ;; `earwig-when-regexp' and `earwig-spoken-time' (earwig-org.el), help
 ;; in writing them.  Commands joined by `earwig-chain-words' ("cut that
 ;; and then go to top and then paste") run one after another.  Ending
@@ -303,29 +304,175 @@ For spoken text that goes into a search, say.  TEXT may be nil."
   (minibuffer-with-setup-hook (lambda () (when input (insert input)))
     (call-interactively command)))
 
-(defun earwig--parse-number (text)
-  "Return the number TEXT says, as digits or words, or nil.
-Understands e.g. \"42\", \"forty two\", \"one hundred and five\"."
-  (if (string-match-p "\\`[0-9]+\\'" text)
-      (string-to-number text)
-    (let ((units '("zero" "one" "two" "three" "four" "five" "six" "seven" "eight"
-                   "nine" "ten" "eleven" "twelve" "thirteen" "fourteen" "fifteen"
-                   "sixteen" "seventeen" "eighteen" "nineteen"))
-          (tens '("twenty" "thirty" "forty" "fifty" "sixty" "seventy" "eighty" "ninety"))
-          (total 0) (current 0) (seen nil) (ok t))
-      (dolist (word (split-string (downcase text) "[ -]+" t))
-        (cond
-         ((member word units)
-          (setq current (+ current (cl-position word units :test #'equal)) seen t))
-         ((member word tens)
-          (setq current (+ current (* 10 (+ 2 (cl-position word tens :test #'equal)))) seen t))
-         ((equal word "hundred")
-          (setq current (* (max current 1) 100) seen t))
-         ((equal word "thousand")
-          (setq total (+ total (* (max current 1) 1000)) current 0 seen t))
-         ((equal word "and"))
-         (t (setq ok nil))))
-      (when (and ok seen) (+ total current)))))
+(defconst earwig--number-words
+  '(("zero" . 0) ("oh" . 0) ("one" . 1) ("two" . 2) ("three" . 3) ("four" . 4)
+    ("five" . 5) ("six" . 6) ("seven" . 7) ("eight" . 8) ("nine" . 9)
+    ("ten" . 10) ("eleven" . 11) ("twelve" . 12) ("thirteen" . 13)
+    ("fourteen" . 14) ("fifteen" . 15) ("sixteen" . 16) ("seventeen" . 17)
+    ("eighteen" . 18) ("nineteen" . 19) ("twenty" . 20) ("thirty" . 30)
+    ("forty" . 40) ("fifty" . 50) ("sixty" . 60) ("seventy" . 70)
+    ("eighty" . 80) ("ninety" . 90))
+  "The number words below a hundred, and their values.")
+
+(defconst earwig--number-scales
+  '(("thousand" . 1000) ("million" . 1000000) ("billion" . 1000000000))
+  "The words above \"hundred\" that multiply the number before them.")
+
+(defconst earwig--number-points '("point" "decimal")
+  "The words between a number and its decimals.")
+
+(defun earwig--number-error (text format &rest args)
+  "Signal a `user-error' that TEXT says no number, for the reason FORMAT and ARGS."
+  (user-error "Can't parse number \"%s\": %s" text (apply #'format format args)))
+
+(defun earwig--number-quote (word)
+  "Return WORD in double quotes, or \"nothing\" if it's nil."
+  (if word (format "\"%s\"" word) "nothing"))
+
+(defun earwig--number-tokens (text)
+  "Return the words and digit runs of TEXT, lowercased.
+Spaces, commas and hyphens between words separate them, as in
+\"forty-two\" and \"1,000\"; a dot before a digit is \"point\"."
+  (let ((text (downcase (string-trim text))))
+    (setq text (replace-regexp-in-string "[.?!]+\\'" "" text)
+          text (replace-regexp-in-string "-\\([a-z]\\)" " \\1" text)
+          text (replace-regexp-in-string "\\.\\([0-9]\\)" " point \\1" text))
+    (split-string text "[ \t\n,;:]+" t)))
+
+(defun earwig--number-chunk (tokens text start decimals)
+  "Read the number that begins TOKENS, the words of TEXT, as far as it goes.
+Return (DIGITS . REST): its digits as a string, and the tokens after it.
+It ends at a word that can't continue it, as the second \"one\" in \"one
+one\" can't, and signals a `user-error' at one that can't come there at
+all.  START non-nil lets it begin with \"a\", \"hundred\" or a scale, as at
+the start of TEXT; DECIMALS non-nil, after a decimal point, allows
+neither \"hundred\" nor a scale."
+  (let ((total 0)        ; what the scales so far make
+        (limit nil)      ; the last scale: the next must be smaller
+        (hundreds nil)   ; the hundreds of the group since then
+        (small nil)      ; the rest of the group
+        (kind nil)       ; what SMALL is: unit, teen, tens, tens-unit, digits or zero
+        (literal nil)    ; the digit run the number began with, leading zeros and all
+        (empty t)
+        (after-and nil)
+        (last nil))
+    (when (and start (equal (car tokens) "a"))
+      (unless (or (equal (cadr tokens) "hundred")
+                  (assoc (cadr tokens) earwig--number-scales))
+        (earwig--number-error text "\"a\" before %s" (earwig--number-quote (cadr tokens))))
+      (setq last "a" tokens (cdr tokens)))
+    (while
+        (and tokens
+             (let* ((token (car tokens))
+                    (value (cdr (assoc token earwig--number-words)))
+                    (scale (cdr (assoc token earwig--number-scales)))
+                    (digits (and (string-match-p "\\`[0-9]+\\'" token)
+                                 (string-to-number token)))
+                    (taken
+                     (cond
+                      ((member token earwig--number-points) nil)
+                      ((and value (zerop value))
+                       (when empty (setq small 0 kind 'zero literal "0") t))
+                      ((and value (< value 10))
+                       (cond ((null kind) (setq small value kind 'unit) t)
+                             ((eq kind 'tens) (setq small (+ small value) kind 'tens-unit) t)))
+                      ((and value (< value 20))
+                       (when (null kind) (setq small value kind 'teen) t))
+                      (value
+                       (when (null kind) (setq small value kind 'tens) t))
+                      (digits
+                       (cond (empty (setq small digits kind 'digits literal token) t)
+                             ((and (eq kind 'tens) (= (length token) 1) (> digits 0))
+                              (setq small (+ small digits) kind 'tens-unit) t)
+                             ((and (null kind) (< digits (if hundreds 100 1000)))
+                              (setq small digits kind 'digits) t)))
+                      ((or scale (equal token "hundred"))
+                       (when decimals
+                         (earwig--number-error text "\"%s\" after a decimal point" token))
+                       (let ((group (+ (or hundreds 0) (or small 0))))
+                         (cond ((and empty start)
+                                (if scale
+                                    (setq total scale limit scale)
+                                  (setq hundreds 100)))
+                               ((and (not scale) (null hundreds) small (<= 1 small 99))
+                                (setq hundreds (* small 100) small nil kind nil))
+                               ((and scale (> group 0) (or (null limit) (< scale limit)))
+                                (setq total (+ total (* group scale)) limit scale
+                                      hundreds nil small nil kind nil))
+                               (t (earwig--number-error text "\"%s\" after %s"
+                                                        token (earwig--number-quote last))))
+                         t))
+                      ((equal token "and")
+                       (unless (or (equal last "hundred") (assoc last earwig--number-scales))
+                         (earwig--number-error text "\"and\" after %s" (earwig--number-quote last)))
+                       (unless (cdr tokens)
+                         (earwig--number-error text "nothing after \"and\""))
+                       t)
+                      ((equal token "a")
+                       (earwig--number-error text "\"a\" goes only first, as in \"a hundred\""))
+                      (t (earwig--number-error text "\"%s\" is no number" token)))))
+               (cond
+                (taken
+                 (setq after-and (equal token "and") last token empty nil
+                       tokens (cdr tokens))
+                 t)
+                (after-and
+                 (earwig--number-error text "\"%s\" after \"and\"" token))
+                (empty
+                 (earwig--number-error text "\"%s\" out of place" token))))))
+    (cons (if (and literal (zerop total) (null hundreds))
+              literal
+            (number-to-string (+ total (or hundreds 0) (or small 0))))
+          tokens)))
+
+(defun earwig--read-number (text)
+  "Return the number TEXT says, or signal a `user-error' that says why not.
+See `earwig-parse-number'."
+  (let ((tokens (earwig--number-tokens text))
+        (start t) whole decimals in-decimals)
+    (unless tokens
+      (earwig--number-error text "there's no number"))
+    (while tokens
+      (if (member (car tokens) earwig--number-points)
+          (progn
+            (when in-decimals
+              (earwig--number-error text "a second decimal point"))
+            (unless (cdr tokens)
+              (earwig--number-error text "nothing after \"%s\"" (car tokens)))
+            (setq in-decimals t tokens (cdr tokens)))
+        (pcase-let ((`(,digits . ,rest)
+                     (earwig--number-chunk tokens text start in-decimals)))
+          (if in-decimals (push digits decimals) (push digits whole))
+          (setq tokens rest)))
+      (setq start nil))
+    (string-to-number
+     (concat (if whole (apply #'concat (nreverse whole)) "0")
+             (and decimals (concat "." (apply #'concat (nreverse decimals))))))))
+
+(defun earwig-parse-number (text &optional whole noerror)
+  "Return the number TEXT says, in digits or words.
+Understands e.g. \"42\", \"forty-two\", \"one hundred and five\", \"a
+thousand\", \"2 million\" and \"1,000\", and decimals after \"point\" or
+\"decimal\", as in \"two point five\" or \"2.5\", which give a float.
+Numbers said one after another give one number of all their digits, as
+when a number is said digit by digit or in parts: \"one one\" is 11,
+\"nineteen eighty-four\" 1984, \"five twenty\" 520.  \"oh\" is zero, as
+in \"nineteen oh five\".
+
+When TEXT says no number, as \"lots\", \"minus three\" or \"five hundred
+hundred\" don't, signal a `user-error' that says why: \"Can't parse
+number ...\".  With WHOLE, do so for a decimal too: \"Not a whole
+number ...\".  With NOERROR, return nil instead of signalling.
+
+Leaves the match data alone, so a caller can parse a group and then
+read the next."
+  (save-match-data
+    (condition-case err
+        (let ((number (earwig--read-number (or text ""))))
+          (when (and whole (floatp number))
+            (user-error "Not a whole number: \"%s\"" text))
+          number)
+      (user-error (unless noerror (signal (car err) (cdr err)))))))
 
 ;;;; Editing and moving around
 
@@ -343,8 +490,7 @@ Understands e.g. \"42\", \"forty two\", \"one hundred and five\"."
 
 (defun earwig-cmd-goto-line (number)
   "Go to the line NUMBER says."
-  (let ((line (or (earwig--parse-number number)
-                  (user-error "Not a line number: %s" number))))
+  (let ((line (earwig-parse-number number t)))
     (push-mark)
     (goto-char (point-min))
     (forward-line (1- line))))

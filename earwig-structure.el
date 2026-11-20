@@ -82,7 +82,7 @@
 (declare-function org-at-item-checkbox-p "org-list" ())
 (declare-function markdown-code-block-at-pos "markdown-mode" (pos))
 (declare-function evil-insert-state "evil-states" (&optional arg))
-(declare-function earwig--parse-number "earwig-commands" (text))
+(declare-function earwig-parse-number "earwig-commands" (text &optional whole noerror))
 
 (defcustom earwig-dictation-structure t
   "Non-nil to act on heading and list item phrases in dictation.
@@ -466,7 +466,7 @@ With COMMA, by commas."
   (barf-if-buffer-read-only)
   (earwig-join-sentences
    (if count
-       (max 1 (1- (or (earwig--parse-number count) (user-error "Not a number: %s" count))))
+       (max 1 (1- (earwig-parse-number count t)))
      1)
    (and comma t)))
 

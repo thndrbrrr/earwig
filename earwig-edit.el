@@ -133,7 +133,7 @@
 (defvar evil-visual-end)
 (defvar org-todo-keywords-1)
 (defvar org-emphasis-regexp-components)
-(declare-function earwig--parse-number "earwig-commands" (text))
+(declare-function earwig-parse-number "earwig-commands" (text &optional whole noerror))
 (declare-function earwig--match-case "earwig-cleanup" (match replacement))
 (declare-function earwig--keep-capital-p "earwig-cleanup" (word))
 (declare-function earwig--sentence-start-p "earwig-cleanup" (pos))
@@ -189,9 +189,7 @@ KIND is `select', `before' or `after'; for \"next one\".")
 
 (defun earwig--count (count)
   "Return the number spoken as COUNT, one if nil."
-  (if count
-      (or (earwig--parse-number count) (user-error "Not a number: %s" count))
-    1))
+  (if count (earwig-parse-number count t) 1))
 
 (defun earwig--this-unit (unit)
   "Return (BEG . END) of the UNIT (a string) around point."
