@@ -29,7 +29,7 @@
 ;; B [in TARGET | everywhere]" takes the same targets as its scope.
 ;; `earwig-edit-commands' goes into `earwig-commands', so like any
 ;; voice command the whole phrase has to match, ignoring case and
-;; punctuation.  README.md has the same as a user's guide.
+;; punctuation.  docs/manual.md has the same as a user's guide.
 ;;
 ;; Verbs, in `earwig--edit-verbs':
 ;;   select                      a visual selection in evil's normal and

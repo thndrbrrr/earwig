@@ -10,8 +10,21 @@ Tap a key to talk and tap it again to stop, or use push-to-talk and hold the spa
 
 Earwig runs on macOS. Other platforms are [on the roadmap](docs/roadmap/README.md).
 
+This README covers installing, setting up and using Earwig. The [manual](docs/manual.md) has the full reference.
+
 > [!NOTE]
 > [Claude](https://claude.ai) wrote most of it, while I spent decades in software engineering learning what to make, what to keep, and what to throw away. ¯\\_(ツ)\_/¯
+
+## Features
+
+- **Dictation** into any buffer, cleaned up as it goes in: filler words like "uhm" dropped, spoken punctuation turned into symbols, capitals and spacing fitted to where the text goes.
+- **Streaming:** words appear while you talk and settle at each pause.
+- **Tap or hold:** tap a key to start and stop, or hold the space bar to talk.
+- **Voice commands** to select, delete, move, format and replace text by a verb and a target, to add headings and list items in Org and Markdown, and to get around Emacs.
+- **Commands while dictating:** pause, say "okay" and one or more commands, and carry on dictating.
+- **Corrections** that Earwig learns, so a word misheard once is right from then on.
+- **Commands of your own**, a regexp and a function each.
+- **Local transcription** by [Orukeet](https://github.com/Oruk-AI/orukeet).
 
 ## Requirements
 
@@ -23,138 +36,75 @@ Earwig runs on macOS. Other platforms are [on the roadmap](docs/roadmap/README.m
 
 ## Installation
 
-Install Earwig from its repository, with `use-package` (Emacs 30) or `M-x package-vc-install`:
+Install Earwig from its repository, with `use-package` (Emacs 30) or `M-x package-vc-install`. Earwig also needs to know where the speech server is and how to start it: the settings below assume the server is installed in `~/.local/share/orukeet` and listens on port 18178, as set up in step 2 of [Setup](#setup).
 
 ```elisp
 (use-package earwig
   :vc (:url "https://github.com/thndrbrrr/earwig" :rev :newest)
+  :custom
+  (earwig-speech-server-directory "~/.local/share/orukeet")
+  (earwig-speech-server-command '(".venv/bin/python" "local_server.py"
+                                  "--installation" "installation.json"
+                                  "--port" "18178"))
+  (earwig-speech-server-base-url "http://127.0.0.1:18178")
   :config
   (earwig-mode 1))
 ```
 
-`:rev :newest` installs the latest commit; without it, `use-package` installs the last release, the commit that last changed the version number. `M-x package-vc-install` installs the latest commit too.
+`:rev :newest` installs the latest commit; without it, `use-package` installs the last release, the commit that last changed the version number. `M-x package-vc-install` installs the latest commit too; set the options with `setopt` as below.
 
 Alternatively, clone the repository, add its directory to your `load-path`, and turn Earwig on:
 
 ```elisp
 (add-to-list 'load-path "/path/to/earwig")
 (require 'earwig)
+(setopt earwig-speech-server-directory "~/.local/share/orukeet"
+        earwig-speech-server-command '(".venv/bin/python" "local_server.py"
+                                       "--installation" "installation.json"
+                                       "--port" "18178")
+        earwig-speech-server-base-url "http://127.0.0.1:18178")
 (earwig-mode 1)
 ```
 
 ## Setup
 
-1. **Tools.** A recorder, sox or ffmpeg, and curl. sox is the one to have: it starts recording sooner, and only it can stream, showing text while you talk.
+1. **Recorder.** Install sox. Earwig can record with ffmpeg instead, but only sox starts recording quickly enough not to lose your first words, and only sox can stream:
 
    ```sh
    brew install sox
    ```
 
-   Or, if you'd rather use ffmpeg, or already have it:
-
-   ```sh
-   brew install ffmpeg
-   ```
-
-   Earwig records with sox if it's installed and with ffmpeg otherwise; `earwig-recorder` chooses one. With ffmpeg, dictation is transcribed when you stop rather than while you talk.
-
-2. **The speech server.** The speech server is a separate program that does the transcribing; Earwig doesn't include or install one. Earwig sends each recording to `earwig-speech-server-base-url` (`http://127.0.0.1:18178` by default), and needs a server there that:
-   - answers OpenAI's `POST /v1/audio/transcriptions`, with `file`, `model` (`earwig-speech-server-model`, `"orukeet"`) and `response_format=text`, with the transcription as plain text;
-   - only listens once it's ready to transcribe, as Earwig takes a listening server for a ready one.
-
-   Orukeet's `local_server.py` is such a server. It isn't part of the Orukeet package: it's an example in Orukeet's repository, so you download it, and its requirements, next to the installation. All of it goes in a directory of its own, such as `~/.local/share/orukeet` (see Orukeet's [local server guide](https://github.com/Oruk-AI/orukeet/blob/main/examples/local-server.md)):
+2. **Speech server.** Install Orukeet and its example server, `local_server.py`, in a directory of their own, the one the configuration under [Installation](#installation) names (see Orukeet's [local server guide](https://github.com/Oruk-AI/orukeet/blob/main/examples/local-server.md)):
 
    ```sh
    mkdir -p ~/.local/share/orukeet && cd ~/.local/share/orukeet
+
    # Orukeet itself
    python3.12 -m venv .venv
    .venv/bin/pip install https://github.com/Oruk-AI/orukeet/releases/download/v0.1.1/orukeet-0.1.1-py3-none-any.whl
    .venv/bin/orukeet install --device cpu --cache ./orukeet-cache --output installation.json
+
    # The server, from Orukeet's examples/
    curl -fLO https://raw.githubusercontent.com/Oruk-AI/orukeet/main/examples/local_server.py
    curl -fLO https://raw.githubusercontent.com/Oruk-AI/orukeet/main/examples/local-server-requirements.txt
    .venv/bin/pip install -r local-server-requirements.txt
    ```
 
-   The directory then holds `.venv/`, `orukeet-cache/`, `installation.json`, `local_server.py` and `local-server-requirements.txt`. The runtime and model take about 700 MB. To have Earwig start and stop the server (`M-x earwig-speech-server-start`), add the configuration below. The speech server per default listens on port 8000, and since this is a pretty common local port, you should probably start it with a different port (`--port 18178` in the example below):
+   The runtime and model take about 700 MB. With the configuration from [Installation](#installation), Earwig starts the server for you: dictating while no server answers offers to start it, or use `M-x earwig-speech-server-start` (`-stop`, `-toggle`, `-log`). The server's default port, 8000, is a common one, so the configuration starts it on port 18178 instead. To run it yourself, or to use another server, see [The speech server](docs/manual.md#the-speech-server) in the manual.
 
-   ```elisp
-   ;; Package-style install
-   (use-package earwig
-     :vc (:url "https://github.com/thndrbrrr/earwig" :rev :newest)
-     :custom
-     (earwig-speech-server-directory "~/.local/share/orukeet")
-     (earwig-speech-server-command '(".venv/bin/python" "local_server.py"
-                              "--installation" "installation.json"
-                              "--port" "18178"))
-     (earwig-speech-server-base-url "http://127.0.0.1:18178")
-     :config
-     (earwig-mode 1))
-	 
-   ;; Cloned repo install
-   (setopt earwig-speech-server-directory "~/.local/share/orukeet"
-           earwig-speech-server-command '(".venv/bin/python" "local_server.py"
-                                   "--installation" "installation.json"
-                                   "--port" "18178")
-           earwig-speech-server-base-url "http://127.0.0.1:18178")
-   ```
-
-   `M-x earwig-speech-server-stop` stops it again, asking it to shut down and killing it after `earwig-speech-server-stop-timeout` seconds (10), and `M-x earwig-speech-server-toggle` does either; `M-x earwig-speech-server-log` shows its output. Dictating while no server answers offers to start it.
-
-   Or leave `earwig-speech-server-command` unset and start the server yourself, at login with launchd for one; Earwig uses whatever listens at `earwig-speech-server-base-url`. From its directory, that's:
+3. **Keyboard and microphone.** For push-to-talk, holding a key must repeat it rather than show the accent menu (restart Emacs afterwards):
 
    ```sh
-   .venv/bin/python local_server.py --installation installation.json --port 18178
+   defaults write org.gnu.Emacs ApplePressAndHoldEnabled -bool false
    ```
 
-3. **Keyboard and microphone (optional).** Push-to-talk tells a held key from a tap by the key repeating, so it depends on the keyboard settings. The defaults of `earwig-hold-*` are on the safe side: they suit a repeat that starts within about 1.1 s and comes every 100 ms or faster, which takes in what macOS starts with. Faster settings let smaller `earwig-hold-*` values notice a hold, and its release, sooner; `earwig-check-setup` (step 5) reads the settings and suggests the values (see step 4).
+   A fast key repeat (System Settings › Keyboard) makes push-to-talk notice a hold and its release sooner; see [Microphone and keyboard timing](docs/manual.md#microphone-and-keyboard-timing). macOS asks for microphone access the first time Emacs records; if it was denied, allow Emacs under System Settings › Privacy & Security › Microphone.
 
-   - Holding a key must repeat it rather than show the accent menu:
-
-     ```sh
-     defaults write org.gnu.Emacs ApplePressAndHoldEnabled -bool false
-     ```
-
-   - Key repeat is in System Settings › Keyboard, or:
-
-     ```sh
-     defaults write -g InitialKeyRepeat -int 15   # 250 ms until repeat, the shortest in System Settings
-     defaults write -g KeyRepeat -int 2           # then every 33 ms, the fastest
-     ```
-
-     These take effect after logging out and in again; the press and hold setting only needs Emacs restarted.
-   - macOS asks for microphone access the first time Emacs records. If it was denied, allow Emacs under System Settings › Privacy & Security › Microphone.
-
-4. **Options.** Earwig records from the input chosen in the system's sound settings. To pick another, and to fit the timing to your keyboard and microphone:
-
-   ```elisp
-   (setq earwig-input-device "Display Audio")  ; a CoreAudio input name
-
-   ;; Holding a key: these suit the fastest key repeat, 250 ms then every 33 ms
-   (setq earwig-hold-initial-window  0.4
-         earwig-hold-repeat-max      0.07
-         earwig-hold-release-delay   0.15
-         earwig-hold-typing-repeats  3)
-
-   ;; Streaming: pauses depend on the microphone, the rest on the CPU
-   (setq earwig-stream-pause                1.5
-         earwig-stream-speech-ratio         3.0
-         earwig-stream-provisional-interval 1.0
-         earwig-stream-max-segment          15)
-   ```
-
-5. **Check.** Start the server and check the setup until everything is ✓:
-
-   ```
-   M-x earwig-speech-server-start     ; with earwig-speech-server-command; Orukeet takes up to ~20 s to load
-   M-x earwig-check-setup
-   ```
-
-   `earwig-check-setup` records half a second from the microphone and sends it to the server, so it catches a wrong device name, a missing microphone permission or sox driver, and a server that's down, besides the keyboard settings. When it can't record from `earwig-input-device`, it lists the input devices there are, and when the microphone is all but silent, it says so. Press `g` in its report to check again.
-
-   On macOS it reads the press-and-hold setting of the app `org.gnu.Emacs`; for an Emacs built with another bundle identifier, set `earwig-check-app-id` to it, and use it in place of `org.gnu.Emacs` in step 3.
+4. **Check.** Run `M-x earwig-check-setup` until everything is ✓. It records half a second from the microphone, sends it to the server, and checks the keyboard settings. Orukeet takes up to about 20 seconds to load after it starts.
 
 ## Usage
+
+### Keys
 
 | Key                         | Tap                                                                | Hold                     |
 |-----------------------------|--------------------------------------------------------------------|--------------------------|
@@ -164,377 +114,91 @@ Alternatively, clone the repository, add its directory to your `load-path`, and 
 | Space, with push-to-talk on | types a space                                                      | dictate until you let go |
 | C-g, while recording        | cancel a command, or dictation that doesn't stream                 |                          |
 
-The voice keys are in two options, each a list of `(KEY . MODE)` with MODE `dictate` or `command`. Set them with `setopt` or Customize.
+Push-to-talk is off until you turn it on with `(setopt earwig-push-to-talk t)`. To use other keys, see [Configuration](#configuration).
 
-- **`earwig-toggle-keys`**: tapped, the key starts recording, and tapped again stops it. These are Cmd-d and keypad 0 for dictation, Cmd-f and keypad Enter for commands.
-- **`earwig-push-to-talk-keys`**: held down, the key records until you let go. This is the space bar for dictation, and it's off until you turn on push-to-talk.
+### Ways of working
 
-The commands `earwig-dictate` and `earwig-command` do the same for a key of your own, bound in any keymap, or from `M-x`: tapped they toggle, held they record until you let go.
+| Mode                    | How                                                                   | For                                         |
+|-------------------------|-----------------------------------------------------------------------|---------------------------------------------|
+| Dictation               | Tap Cmd-d, talk, tap Cmd-d again                                      | Writing                                     |
+| Push-to-talk            | Hold the space bar while you talk                                     | Short bursts of writing                     |
+| Voice command           | Tap Cmd-f, say the command, tap Cmd-f again                           | Editing, moving around, running commands    |
+| Command while dictating | Pause, say "okay" and the command, pause, carry on                    | Editing without leaving dictation           |
+| Correction              | Put point after a misheard word and press Cmd-e                       | Fixing a mishearing for good                |
 
-### Push-to-talk
+- **Text appears as you talk**, grey until a pause, then final. A command said after "okay" shows in blue and runs at the next pause.
+- **Dictation follows point:** click somewhere else, or say "okay, go to top", and what you say next goes there.
+- **Chain commands** with "and then": "select last sentence and then format bold". End with "never mind" or "cancel" and nothing runs.
+- **Undo:** each command, and each stretch of dictation, is one undo step. "scratch that" takes back the last dictation.
 
-```elisp
-(setopt earwig-push-to-talk t)
-```
+The manual has the details: [how a command is recognized](docs/manual.md#how-a-command-is-recognized), [commands while dictating](docs/manual.md#commands-while-dictating), and [streaming](docs/manual.md#streaming-and-provisional-text).
 
-Then holding the space bar dictates until you let go. Tapped, it still types a space, and it only dictates where it types: in Dired, for one, it does what it always does. Push-to-talk depends on how the keyboard repeats (setup step 3).
+### Commands
 
-The space bar only dictates, but you can give commands without letting go of it: pause, say "okay" and a command, and carry on dictating (see [Commands while dictating](#commands-while-dictating)).
+Say "what can I say" for the full list. Editing commands combine a verb with a target: "select last two words", "delete that", "capitalize deadline", "cut because through Friday".
 
-Any key can push to talk, and a key in both lists does either: tapped it toggles, held it records until you let go. A push-to-talk key that doesn't type does nothing when tapped. For instance, to also dictate by holding Cmd-d and give commands by holding F6, and leave the keypad alone:
+| Kind                                                                                            | Say                                                                                                                                                                                          |
+|-------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [Edit](docs/manual.md#editing-a-verb-and-a-target)                                              | select, delete, cut, copy, capitalize, uppercase, lowercase, title case + TARGET                                                                                                             |
+| [Targets](docs/manual.md#editing-a-verb-and-a-target)                                           | that · this sentence · last two words · next line · everything · WORDS · A through B · WORDS in TARGET                                                                                       |
+| [Format](docs/manual.md#formatting) (Org, Markdown)                                             | format bold, italic, underline, code, verbatim, strike through, plain + TARGET                                                                                                               |
+| [Replace](docs/manual.md#replacing)                                                             | replace A with B · replace A with B in TARGET · replace A with B everywhere                                                                                                                  |
+| [Move](docs/manual.md#moving-and-other-editing)                                                 | go before WORDS · go after WORDS · go to end of line · go to top · go to line N · go to heading NAME · go back                                                                              |
+| [Clipboard and undo](docs/manual.md#moving-and-other-editing)                                   | paste · scratch that · undo · redo                                                                                                                                                           |
+| [Headings and lists](docs/manual.md#headings-and-lists-org-and-markdown) (Org, Markdown)        | new heading · new subheading · new item · new sub item · new checkbox, each with optional TEXT                                                                                               |
+| [Sentences](docs/manual.md#joining-sentences)                                                   | join last sentence · join last sentence with comma                                                                                                                                           |
+| [Emacs](docs/manual.md#emacs-and-org-commands)                                                  | save · search · switch to buffer NAME · other window · scroll down · close buffer · comment that · run command NAME                                                                          |
+| [Org](docs/manual.md#emacs-and-org-commands)                                                    | mark done · toggle todo · schedule for tomorrow · open agenda                                                                                                                                |
+
+### Dictation
+
+Dictation drops "um" and "uh", applies your corrections, and fits the text to where it goes. Say punctuation and breaks where you want them:
+
+| Say                                              | Gives                       |
+|--------------------------------------------------|-----------------------------|
+| comma, period, colon, semicolon                  | `,` `.` `:` `;`             |
+| question mark, exclamation mark                  | `?` `!`                     |
+| open quote, close quote, open paren, close paren | `"` `"` `(` `)`             |
+| em dash, ellipsis                                | `—` `…`                     |
+| new line, new paragraph                          | a line break, a blank line  |
+| new sentence                                     | a capital for the next word |
+
+Say "literal" before one of these to keep it as words: "a literal period of time". In Org and Markdown, "new heading" and "new item" at the start of a sentence start a heading or list item. The manual lists [all spoken punctuation](docs/manual.md#spoken-punctuation), quotes and dialogue included, and how [corrections](docs/manual.md#corrections) work.
+
+## Configuration
+
+All options are in `M-x customize-group RET earwig RET`. These are the ones most worth knowing:
+
+| Option                                                           | Default                     | What it does                                                         |
+|------------------------------------------------------------------|-----------------------------|----------------------------------------------------------------------|
+| `earwig-speech-server-command`, `earwig-speech-server-directory` | nil                         | How and where Earwig starts the speech server; nil to start it yourself |
+| `earwig-speech-server-base-url`                                | `"http://127.0.0.1:18178"`  | Where the speech server listens                                      |
+| `earwig-input-device`                                          | `"default"`                 | The microphone, as named in the system's sound settings              |
+| `earwig-recorder`                                              | `auto`                      | `sox`, `ffmpeg`, or `auto` for sox if it's installed                 |
+| `earwig-toggle-keys`                                           | Cmd-d, keypad 0; Cmd-f, keypad Enter | Keys tapped to start and stop dictation or a command        |
+| `earwig-push-to-talk`                                          | nil                         | Turns push-to-talk on                                                |
+| `earwig-push-to-talk-keys`                                     | Space                       | Keys held down to talk                                               |
+| `earwig-correct-keys`                                          | Cmd-e, keypad `.`           | Keys that correct a misheard word                                    |
+| `earwig-streaming`                                             | t                           | Show text while you talk (needs sox)                                 |
+| `earwig-stream-pause`                                          | 1.5                         | Seconds of silence that end a stretch of dictation                   |
+| `earwig-wake-word-commands`                                    | t                           | Give commands while dictating by saying "okay" first                 |
+| `earwig-command-auto-stop`                                     | nil                         | Seconds of silence that end a voice command; nil to stop it with its key |
+| `earwig-corrections`                                           | nil                         | Your own "wrong => right" corrections                                |
+| `earwig-hold-*`                                                |                             | Push-to-talk timing, to fit your key repeat                          |
+
+For example, to dictate by holding the space bar or Cmd-d, give commands by holding F6, and pick a microphone:
 
 ```elisp
 (setopt earwig-push-to-talk      t
         earwig-push-to-talk-keys '(("SPC" . dictate) ("s-d" . dictate) ("<f6>" . command))
-        earwig-toggle-keys       '(("s-d" . dictate) ("s-f" . command))
-        earwig-correct-keys      '("s-e"))
+        earwig-input-device      "Display Audio")
 ```
 
-### Dictation, commands and the rest
-
-- **Dictation** drops "um" and "uh", applies your corrections, turns spoken punctuation ("comma", "new paragraph") into symbols, and fits the text to where it goes (capitals, spacing, punctuation). In a heading or list item it starts with a capital, and a heading or checkbox item gets no period unless you say "period" or it's more than one sentence. It goes where point is, so click somewhere else and keep talking: the sentence you're saying ends where you moved. You can give commands without leaving dictation: say "okay" and the command at any pause, see [Commands while dictating](#commands-while-dictating).
-- **Commands:** say "what can I say" for the list. Editing is a verb and a target: "select last two words", "delete that", "replace A with B", "go after WORDS".
-- Both are described in full under [Speaking commands and dictation](#speaking-commands-and-dictation).
-- **Streaming** (`earwig-streaming`, on by default): text appears while you talk, provisional (grey, or blue for a command after "okay") until a pause, then final. It needs sox; when ffmpeg records, dictation is transcribed when you stop instead, and *Messages* says so once.
-- **Typing over provisional text:** in dictation started with a tap, pressing a key while provisional text shows puts it in as it stands, and the key does what it does after it. Punctuation you type (`. , : ; ! ? … — – -`, in `earwig-stream-flush-punctuation`) replaces the period or comma the text ends with, so `,` after "Hello there." gives "Hello there,". Typed right after any dictation you haven't edited, streamed or not, it does the same. The space bar as a push-to-talk key does this too, so tapping it ends the segment with a space. What you say next is transcribed on its own. Dictation pushed to talk waits for the final text as usual, and so do the other voice keys, a click, and a command after "okay". `earwig-stream-flush-on-key` turns this off.
-- **Corrections:** Cmd-e fixes a misheard word and remembers "wrong => right" in `earwig-corrections-learned`, saved by Customize and applied to every transcription from then on; with C-u it also fixes the rest of the buffer. Corrections of your own go in `earwig-corrections`, and those only for commands in `earwig-corrections-commands`; all are matched as whole words, ignoring case:
-
-  ```elisp
-  (setopt earwig-corrections
-          '(("Maggot" . "Magit")
-            ("in it yell" . "init.el")))
-  (setopt earwig-corrections-commands
-          '(("kut" . "cut")))       ; "Kut" stays a name in dictation
-  ```
-
-  Command corrections apply only when the command as said matches none, so "find note Kut" still finds Kut. Misheard punctuation goes in `earwig-spoken-format` instead, as more phrases: that's for dictation only, and "literal" keeps one as words:
-
-  ```elisp
-  (setopt earwig-spoken-format
-          (append earwig-spoken-format
-                  '((punct "," "coma")
-                    (punct ":" "colonel" "Colin"))))
-  ```
-
-  For a word misheard in a command of your own, an alternative in its pattern is better still, as Earwig's own "mark done" accepts "dunn": `"mark \\(?:done\\|dunn\\)"`.
-
-## Speaking commands and dictation
-
-### How a command is recognized
-
-- Tap Cmd-f (or keypad Enter), or use another key with the mode `command`, and say the command. Tap it again
-  when you're done, or have a pause end it: with `(setopt
-  earwig-command-auto-stop 1.5)`, recording stops after 1.5 s of
-  silence once what you've said is a complete command (or ends with
-  "cancel"). Earwig transcribes it as you speak to tell. After "go to
-  line" without its number, or a chain ending in "and then", it waits
-  longer, `earwig-command-auto-stop-incomplete` (3 s), before giving
-  up. Commands that take any words, like "select WORDS", are complete
-  after the first word, so don't pause inside those. The whole
-  phrase has to match one; case and punctuation don't matter, and
-  your corrections apply first, and `earwig-corrections-commands`
-  only here. "what can I say" lists them all.
-- While dictating, say "okay" and the command: see below.
-- Each change a command makes is one undo step.
-- Commands joined by "and then" run one after another: "format bold
-  results and then select the last sentence and then cut that, and
-  then go to bottom, and then paste". Each is its own undo step, and
-  the chain stops at one that fails. A phrase is only split where
-  every part is a command, so "replace and then with so" is still one.
-  A command that prompts, like "search", waits for you to answer before
-  the next one runs. The words are in `earwig-chain-words`.
-- While you say a command with a command key, the echo area shows what
-  Earwig has heard so far, about every second: "▶ select last sentence
-  ▶ cut that", the commands it chains in blue, and what isn't (yet) a
-  command in grey. It runs when you stop, as before. An "okay" said
-  out of habit is dropped, here and when it runs.
-  `earwig-command-preview` turns this off.
-- Changed your mind, or misheard? End with "cancel" or "never mind"
-  ("select last sentence and then cut that, never mind") and nothing
-  runs; the preview strikes the commands through. This works after
-  "okay" while dictating too, and nothing is dictated then either. The
-  words are in `earwig-cancel-words`. With a tapped command key, C-g
-  while recording cancels too.
-
-### Commands while dictating
-
-You never have to leave dictation to give a command, or a chain of
-them. While you dictate, pause, say "okay" and the command, pause again, and
-carry on:
-
-> …and that's the plan. *(pause)* Okay, select last sentence and then
-> format bold. *(pause)* Next, the budget…
-
-- This works at every pause (`earwig-stream-pause`, 1.5 s by default),
-  with any dictation key, tapped or held. It needs streaming; without
-  it, only a recording that starts with "okay" is a command.
-- As soon as Earwig hears "okay", the provisional text turns the color
-  of CMD in the mode line (blue) instead of grey, so you can tell a
-  command is coming, and the mode line shows ▶ CMD until the command
-  has run and dictation carries on with ● REC.
-  `earwig-provisional-command` gives the text a face of its own.
-- Provisional text starts with the icon from the mode line, where it
-  will go: the red ● of REC for dictation, the blue ▶ of CMD for a
-  command. For a command, ▶ takes the place of "okay", and of each
-  "and then" after a command: "okay, select last sentence and then cut
-  that" shows as "▶ select last sentence ▶ cut that".
-  `earwig-recording-icon`, `earwig-command-icon` and
-  `earwig-provisional-chain-mark` change them, in the mode line too;
-  `earwig-provisional-icons` turns the icons off in provisional text.
-- To keep the buffer for dictation only, show commands in the echo
-  area instead, as with a command key:
-  `(setopt earwig-provisional-command-display 'echo-area)`.
-- If no command matches, what you said is inserted as dictation,
-  "okay" and all.
-- What only writes forward, where you're dictating, needs no "okay":
-  spoken punctuation, "new line", "new paragraph", and in Org and
-  Markdown "new heading" and "new item" (see [Headings and
-  lists](#headings-and-lists-org-and-markdown)). Everything that
-  changes what's already there, moves, or runs something does.
-- Dictation follows point. After "okay, go to top", or after you click
-  somewhere else, what you say next goes there, even mid-sentence. What
-  you'd already said before you moved still goes where you said it,
-  where its provisional text showed. Leaving evil's insert state, which
-  moves point back a character, doesn't count as moving.
-- Each stretch of dictation between commands, or before you move, is
-  one undo step, and it's what "scratch that" takes back.
-- The wake words are in `earwig-wake-words` ("okay" and "ok"). To
-  have a dictation key only ever dictate, turn it off:
-  `(setopt earwig-wake-word-commands nil)`.
-
-### Editing: a verb and a target
-
-Every verb works on every target: "select last two words", "delete
-that", "capitalize deadline", "cut because through Friday".
-
-| Verb       | Also said as                 | Does                                       |
-|------------|------------------------------|--------------------------------------------|
-| select     |                              | selects it (evil: a visual selection)      |
-| delete     |                              | deletes it, tidying the spaces left behind |
-| cut        |                              | the same, into the kill ring               |
-| copy       | yank                         | copies it to the kill ring                 |
-| capitalize | cap                          | first letter of each word upper case       |
-| uppercase  | upper case, upcase, all caps |                                            |
-| lowercase  | lower case, downcase         |                                            |
-| title case |                              | title case, small words stay lower case    |
-
-| Target                                                | Example                                                                  | Means                                                                                  |
-|-------------------------------------------------------|--------------------------------------------------------------------------|----------------------------------------------------------------------------------------|
-| nothing, region, selection                            | "uppercase", "cut the selection"                                         | the region or evil's visual selection; "select" alone needs one                        |
-| that, this, it                                        | "delete that"                                                            | the region, or else the last dictation in this buffer                                  |
-| [this, the, current] UNIT                             | "select this sentence", "title case line"                                | the unit around point                                                                  |
-| last, previous, next [N] UNITs                        | "delete last three words", "copy next line"                              | before or after point; N as a word or digits                                           |
-| the [whole] buffer or file, everything, all           | "copy everything"                                                        | the whole buffer                                                                       |
-| A through B, A until B, from A to / until / through B | "cut because through Friday", "copy from however until shown"            | from the nearest A that has a B after it to the end of the first such B                |
-| any other words                                       | "capitalize emacs lisp"                                                  | the nearest place those words appear                                                   |
-| WORDS in TARGET                                       | "delete very in this paragraph", "select meow in the last two sentences" | the nearest WORDS (or A through B) inside TARGET, one of the parts of the buffer above |
-
-- **UNIT** is word, sentence, paragraph or line. A deleted or cut line
-  takes its newline with it. "last word" leaves the punctuation after
-  the word alone. In evil's normal state the character under the
-  cursor counts as before point.
-- **Words are found** ignoring case and the punctuation between them,
-  so "end of file" also finds "end-of-file". Markup doesn't get in the
-  way: "heading" is found in `_Some underlined heading_`, and "last
-  word" there is `heading` without the underscore. An underscore
-  between letters joins them, so `foo_bar` is one word. The nearest is looked for
-  in the window first, then in the whole buffer: one around point wins,
-  then the closest before point, then the closest after.
-- **"in"** only scopes when what follows names a part of the buffer;
-  otherwise it's one of the words: "select log in screen".
-- **"next one", "previous one"** (or "next match") move a word target
-  on to the next or previous place it appears, after "select WORDS" or
-  "go before/after WORDS".
-
-### Formatting
-
-"format STYLE TARGET" marks the target up, with any target from the
-table above: "format bold meow in the last two sentences", "format
-italic last word", "format underline from however until shown",
-"format code that". Saying it again takes the style off again.
-
-| Style                                              | Org                                             | Markdown           |
-|----------------------------------------------------|-------------------------------------------------|--------------------|
-| bold                                               | `*bold*`                                        | `**bold**`         |
-| italic, italics                                    | `/italic/`                                      | `_italic_`         |
-| underline, underlined                              | `_underline_`                                   | `<u>underline</u>` |
-| code                                               | `~code~`                                        | `` `code` ``       |
-| verbatim                                           | `=verbatim=`                                    | `` `verbatim` ``   |
-| strike through, strikethrough, strike, crossed out | `+strike+`                                      | `~~strike~~`       |
-| plain, normal, none                                | takes all markup off the target, also inside it |                    |
-
-- Styles combine: "format bold" on italic text gives `/*text*/`.
-- Markup goes around the text of each line, not its indentation,
-  bullet, checkbox or heading stars, nor an Org heading's TODO keyword,
-  priority and tags. A target over several list items or paragraphs is
-  marked up item by item, as is one longer than the two lines Org's
-  emphasis can span.
-- Other modes have no formatting; `earwig-format-markup` says which
-  markup each mode gets.
-
-### Headings and lists (Org and Markdown)
-
-| Say                         | Does                                                                                                                                            |
-|-----------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
-| new heading [TEXT]          | a heading at the level of the one you're under, in it or in its body, after its subtree                                                         |
-| new subheading [TEXT]       | one level deeper, as the last child                                                                                                             |
-| new item, new bullet [TEXT] | the next item of the list you're in, after its sub-items; outside a list, starts a `- ` list on the next line (also "new list", "start a list") |
-| new sub item [TEXT]         | an item one level deeper                                                                                                                        |
-| new checkbox [TEXT]         | an item with `[ ] `                                                                                                                             |
-
-As commands, "next heading" and "next item" work too. Numbered lists go
-on numbering, and an item gets a checkbox when the one before has one.
-TEXT goes in with a capital: "new heading next steps". In Org these use
-Org's own commands, so blank lines and numbering follow Org's settings;
-in Markdown they work on `#` headings outside code blocks and on `-`,
-`+`, `*` and numbered lists.
-
-**In dictation** the same phrases work where they start a sentence, so
-pause before them: "That's all for now. New heading. Next steps. First
-we plan it. New item, buy milk. New item, call mum." gives
-
-```org
-That's all for now.
-** Next steps
-First we plan it.
-- Buy milk
-- Call mum
-```
-
-- The first sentence after "new heading" is the heading, without its
-  period; the rest is its body. A single sentence after "new item"
-  loses its period.
-- It carries over pauses and dictations: "New heading.", then
-  "Next steps.", then the body, each on its own, works the same.
-- Like "new paragraph", these only write forward, where you're
-  dictating, so they need no "okay". Commands that change what's
-  already there, like "join last sentence", do.
-- Mid-sentence, "we need a new heading here" stays words; so does
-  "literal new heading". `(setq earwig-dictation-structure nil)`
-  turns it off.
-
-### Joining sentences
-
-When a pause split a sentence in two, mend it without leaving
-dictation: say "okay, join last sentence". It works in any buffer.
-
-| Say                                          | Gives                                                          |
-|----------------------------------------------|----------------------------------------------------------------|
-| join last sentence                           | "We went to the. Store today." → "We went to the store today." |
-| join last sentence with comma                | "I think so. Then we go." → "I think so, then we go."          |
-| join the last three sentences [with a comma] | three sentences become one                                     |
-
-"join last two sentences" is the same as "join last sentence": the two
-become one. The sentence that follows loses its capital, unless it's
-"I", an acronym or a word your corrections put in. Sentences aren't
-joined across a blank line, or into a list item or heading.
-
-### Replacing
-
-| Say                         | Replaces                                                                     |
-|-----------------------------|------------------------------------------------------------------------------|
-| replace A with B            | the nearest A                                                                |
-| replace A with B in TARGET  | every A in TARGET: "in this paragraph", "in the last three lines", "in that" |
-| replace A with B everywhere | every A in the buffer                                                        |
-| replace that with B         | the region itself, if there is one                                           |
-
-B takes A's capital ("Monday" → "Tuesday" at a sentence start), but
-the capital of "I", an acronym or a name only at a sentence start:
-"replace I with we" gives "we" mid-sentence. TARGET
-is a part of the buffer from the table above, not words. A and B may
-themselves contain "with".
-
-### Moving and other editing
-
-| Say                                                                    | Does                                                                                                 |
-|------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|
-| go before WORDS, go after WORDS [in TARGET]                            | moves to the nearest place those words appear                                                        |
-| go to [the] start of / beginning of / end of line, sentence, paragraph |                                                                                                      |
-| go back                                                                | back to where point was before the last "go" (or "next one" after "go"); again, to where it went     |
-| paste                                                                  | the buffer's own paste, spaced from the words around it as dictation is; see below                  |
-| new line, new paragraph                                                |                                                                                                      |
-| scratch that                                                           | deletes the last dictation                                                                           |
-| undo, redo                                                             |                                                                                                      |
-
-- **Moving text:** "cut last sentence and then go before mercy and then
-  paste" puts the sentence there with a space on either side, as
-  dictation would. Lines cut or copied whole ("cut this line", "copy
-  last two lines") go in as lines: before the line point is on, or
-  after it when point is at the end of its text. "go after sharks and
-  then cut this line and then go before Igor and then paste" swaps two
-  list items.
-- **In evil,** paste goes after the cursor in normal state, but where
-  "go before" or "go after" put it right after one of those. A visual
-  selection is replaced. Lines cut or copied whole are line-wise for
-  evil's own `p` and `P` too. Terminals get the paste as typed input,
-  unspaced.
-
-### Dictation: spoken punctuation
-
-Inside dictation these phrases become symbols; Orukeet's own
-punctuation around them goes ("tomorrow, period." becomes "tomorrow.").
-
-| Say                                                             | Gives                      |
-|-----------------------------------------------------------------|----------------------------|
-| comma, period / full stop, colon, semicolon                     | `,` `.` `:` `;`            |
-| question mark, exclamation mark / point                         | `?` `!`                    |
-| ellipsis, dot dot dot                                           | `…`                        |
-| open paren / close paren (also parenthesis)                     | `(` `)`                    |
-| open bracket / close bracket (also square bracket)              | `[` `]`                    |
-| open brace / close brace (also curly brace)                     | `{` `}`                    |
-| open quote / close quote (also begin quote, end quote, unquote) | `"` `"`                    |
-| open single quote / close single quote                          | `'` `'`                    |
-| quote, single quote                                             | a quote that opens or closes |
-| continue quote, continue single quote                           | `, "` with no capital after |
-| em dash                                                         | `—`                        |
-| new line, new paragraph                                         | a line break, a blank line |
-| new sentence                                                    | a capital for the next word |
-
-- **Spacing:** punctuation and closing brackets attach to the word
-  before; opening brackets to the word after; an em dash to both. The
-  word after a sentence end or a break gets a capital.
-- **Quotes:** an opening quote attaches to the word after, which gets a
-  capital where the quote starts a sentence: at the start of one or
-  after a comma or colon, as in `He said, “Go.”`. After a closing
-  quote, the next word gets a capital only if a period ends the quote,
-  so `“Go!” she said` stays lower case. "open double quote" is there
-  too; for single quotes on "open quote", see `earwig-spoken-format`.
-- **Dialogue:** "quote" closes the quote open in the paragraph, or
-  opens one: "quote fiddlesticks exclamation mark quote he snapped"
-  gives `“Fiddlesticks!” he snapped`. "new sentence" gives the next
-  word a capital: `“Fiddlesticks!” He snapped`. "continue quote" opens
-  a quote again with no capital after it, and a comma before it in
-  place of a period: "he said continue quote to tell you" gives
-  `he said, “to tell you`. A closing quote has the punctuation
-  inside: what you said, or else Orukeet's on either side of "quote"
-  (a question or exclamation mark, a period, or a comma), so "for her
-  quote" gives `for her.”`. Orukeet's punctuation between the words
-  of a phrase, as in "continue, quote", doesn't matter. As
-  "quote" is a word too, say "literal quote" for it.
-- **Curly quotes:** quotes and apostrophes are curly (`“Don’t”`) where
-  `electric-quote-mode` would curl what you type, as
-  `earwig-curly-quotes` says, with the characters of
-  `electric-quote-chars`.
-- **Across a pause:** said on its own after a pause, "comma" replaces
-  the period Orukeet ended the previous part with.
-- **As a word:** "literal" before a phrase keeps it: "a literal period
-  of time".
-- **In terminals** punctuation works, but "new line" stays words, so
-  it can't press Enter.
-- **Code symbols:** hyphen, dash, underscore, slash, backslash, dot
-  and tilde are also ordinary words, so they're off. To dictate "foo
-  dot el" as `foo.el`:
-
-  ```elisp
-  (setq earwig-spoken-format
-        (append earwig-spoken-format earwig-spoken-format-code))
-  ```
-
-- `(setq earwig-format-dictation nil)` turns it all off.
+The manual has [every option](docs/manual.md#customization-reference).
 
 ## Commands of your own
 
-`earwig-extra-commands` holds commands of your own, as `(PATTERN FUNCTION HELP)`. They're tried before Earwig's, so they can also take over one of its phrases. PATTERN is a regexp matched against the whole command, ignoring case and punctuation; FUNCTION gets the groups of PATTERN as arguments, or is called interactively if PATTERN has none. HELP is what "what can I say" shows.
+Add voice commands to `earwig-extra-commands`, each as `(PATTERN FUNCTION HELP)`. PATTERN is a regexp matched against the whole command, ignoring case and punctuation. FUNCTION gets the regexp's groups as arguments, or is called interactively if there are none. HELP is what "what can I say" shows. Your commands are tried before Earwig's own.
 
 ```elisp
 (with-eval-after-load 'earwig
@@ -549,134 +213,21 @@ punctuation around them goes ("tomorrow, period." becomes "tomorrow.").
   (earwig-with-input (earwig-downcase-first-word name) #'find-file))
 ```
 
-- `earwig-with-input` calls a command with text typed into its first prompt.
-- `earwig-downcase-first-word` undoes the capital Orukeet gives the first word.
-- `earwig-parse-number` returns the number a spoken group says, in digits or words: "42", "forty-two", "one hundred and five", "a thousand", "1,000", "2 million". Numbers said one after another make one of all their digits, so "one one" is 11, "nineteen eighty-four" 1984 and "five twenty" 520, and a decimal after "point" or "decimal" ("two point five", "2.5") gives a float. Anything else signals an error that says what it couldn't read, `Can't parse number "five hundred hundred": "hundred" after "hundred"`, and the command fails with it. With a second argument, a decimal fails too ("Not a whole number"); with a third, it returns nil instead of failing. Match the group with `\\(.+\\)` rather than digits, as Orukeet may write the number either way.
-- `earwig-raw-command` is the command as transcribed while it runs, with its punctuation, for passing on what was said.
-- `earwig-part-range` returns `(BEG . END)` of a part of the buffer, named as the editing commands' targets are: "last two sentences", "this paragraph", "that", "the whole buffer", or nil for the selection. It returns nil for anything else, such as words to look for, and signals a `user-error` if the part isn't there.
-- `earwig-when-regexp` matches a spoken date ("today", "tomorrow", "next week", "next month", "on Friday"), and `earwig-spoken-time` makes it a time, as "schedule" does. They're in `earwig-org.el`, as `earwig-spoken-time` uses Org's date reading.
-
-Some of Earwig's commands use consult when it's installed: "search", "switch to buffer" and "go to heading"; without it, isearch, `switch-to-buffer` and `imenu`.
-
-### Examples
-
-"git status" opens Magit; "good status" is how it's often heard:
-
-```elisp
-(with-eval-after-load 'earwig
-  (add-to-list 'earwig-extra-commands
-               '("\\(?:git\\|good\\) status\\|magit\\(?: status\\)?" magit-status
-                 "git status")))
-```
-
-"open agenda" opens the agenda dispatcher. To go straight to a view of your own, here the one under the key "a":
-
-```elisp
-(with-eval-after-load 'earwig
-  (add-to-list 'earwig-extra-commands
-               '("open \\(?:the \\)?agenda"
-                 (lambda () (interactive) (org-agenda nil "a"))
-                 "open agenda")))
-```
-
-"count words in last two paragraphs" shows how many words they have; the part can be named as the editing commands' targets are, as in "count words in this sentence" or "count words in the whole buffer", and plain "count words" counts the selection:
-
-```elisp
-(with-eval-after-load 'earwig
-  (add-to-list 'earwig-extra-commands
-               '("count words\\(?: in \\(.+\\)\\)?" my/count-words
-                 "count words [in TARGET]")))
-
-(defun my/count-words (target)
-  (let ((range (or (earwig-part-range target)
-                   (user-error "Not a part of the buffer: %s" target))))
-    (message "%d words" (count-words (car range) (cdr range)))))
-```
-
-"remind me tomorrow to call the bank" adds a TODO to inbox.org, scheduled for tomorrow; "remind me to …" leaves it unscheduled:
-
-```elisp
-(with-eval-after-load 'earwig
-  (add-to-list 'earwig-extra-commands
-               `(,(concat "remind me\\(?: \\(" earwig-when-regexp "\\)\\)? to \\(.+\\)")
-                 my/remind
-                 "remind me [today | tomorrow | next week | on DAY] to TASK")))
-
-(defun my/remind (when task)
-  (let* ((time (earwig-spoken-time when))
-         (org-capture-templates
-          `(("v" "Voice reminder" entry
-             (file ,(expand-file-name "inbox.org" org-directory))
-             ;; TASK goes in as %i, so %-sequences in it aren't expanded
-             ,(concat "* TODO %i"
-                      (when time (format-time-string "\nSCHEDULED: <%Y-%m-%d %a>" time)))
-             :immediate-finish t))))
-    (org-capture-string (concat (upcase (substring task 0 1)) (substring task 1)) "v")))
-```
-
-## Customization
-
-All options live under `M-x customize-group RET earwig RET`, the speech server, streaming and hold timing in subgroups.
-
-- **`earwig-input-device`** – The microphone to record from (`"default"`: the one chosen in the system's sound settings), named as the audio driver names it.
-- **`earwig-recorder`** – `sox`, `ffmpeg`, or `auto` (sox if it's installed), for dictation and commands.
-- **`earwig-recording-timeout`** – Seconds after which a recording that isn't streamed, a command or dictation without streaming, stops by itself (300; nil for no limit).
-- **`earwig-audio-driver`** – The driver sox records through (`auto`: coreaudio on macOS).
-- **`earwig-toggle-keys`**, **`earwig-correct-keys`** – The keys of `earwig-mode` that toggle recording when tapped, and those that correct.
-- **`earwig-push-to-talk`**, **`earwig-push-to-talk-keys`** – Whether there's push-to-talk (off by default), and the keys that record while held (the space bar).
-- **`earwig-wake-word-commands`**, **`earwig-wake-words`** – Whether you can give commands while dictating by saying "okay" first (on by default), and the words for that.
-- **`earwig-chain-words`** – The words between commands that run them one after another (`"and then"`).
-- **`earwig-cancel-words`** – Words that, said last, cancel a command (`"cancel"`, `"never mind"`).
-- **`earwig-command-auto-stop`**, **`earwig-command-auto-stop-incomplete`** – Seconds of silence after a complete voice command started with a tap that stop its recording (nil, off: only the key stops it), and after what isn't a command yet (3; nil to wait for the key).
-- **`earwig-command-preview`**, **`earwig-provisional-command-display`** – Whether a command said with a command key shows in the echo area as you say it (on), and whether a command given while dictating shows in the buffer (the default) or the echo area.
-- **`earwig-corrections`**, **`earwig-corrections-commands`**, **`earwig-corrections-learned`** – "Wrong => right" corrections: for every transcription, for commands only, and those made with Cmd-e.
-- **`earwig-filler-words`**, **`earwig-keep-capitalized`** – Words dropped from dictation, and words that keep their capital mid-sentence.
-- **`earwig-format-dictation`**, **`earwig-spoken-format`**, **`earwig-literal-word`** – Spoken punctuation in dictation.
-- **`earwig-log-transcriptions`** – Log each transcription to *Messages*, as Orukeet wrote it and what Earwig made of it (off by default): to see which words are misheard again and again, for `earwig-corrections`, or where spoken punctuation goes wrong.
-- **`earwig-log-commands`** – Log each voice command to *Messages* as it runs, said with a command key or after "okay" (off by default): as its provisional text shows, "▶ select last sentence ▶ cut that", with what isn't a command in grey and a cancelled one struck through.
-- **`earwig-curly-quotes`** – Whether dictated quotes and apostrophes are curly: where `electric-quote-mode` is on (the default), everywhere, or nowhere.
-- **`earwig-dictation-structure`** – Headings and list items said in dictation.
-- **`earwig-format-markup`** – The markup "format STYLE" uses in each major mode.
-- **`earwig-extra-commands`** – Commands of your own, see [Commands of your own](#commands-of-your-own).
-- **`earwig-streaming`** and **`earwig-stream-*`** – Streaming (on by default; needs sox, and with ffmpeg dictation is transcribed when you stop, as *Messages* notes once), the pause that ends a segment, how loud speech is against the noise, provisional text.
-- **`earwig-hold-*`** – Telling a held key, push-to-talk, from a tap.
-- **Faces** – `earwig-mode-line-recording` (red), `earwig-mode-line-command` (blue) and `earwig-mode-line-transcribing` for REC, CMD and STT in the mode line, and their icons ● and ▶ (`earwig-recording-icon`, `earwig-command-icon`), also before provisional text; `earwig-provisional` for provisional text, and `earwig-provisional-command` for that of a command said while dictating (unset, it takes the color of CMD).
-- **`earwig-speech-server-base-url`**, **`earwig-speech-server-model`** – The address of the speech server Earwig sends recordings to, and the model name it asks for.
-- **`earwig-speech-server-command`**, **`earwig-speech-server-directory`** – How `M-x earwig-speech-server-start` runs the speech server as a subprocess of Emacs, and in which directory; unset, you start the server outside Emacs.
-- **`earwig-speech-server-stop-timeout`** – Seconds `M-x earwig-speech-server-stop` waits for the server to shut down before killing it.
-- **`earwig-check-app-id`** – The macOS bundle identifier of Emacs, whose press-and-hold setting `earwig-check-setup` reads.
+Earwig has helpers for commands like these, such as `earwig-parse-number` for spoken numbers and `earwig-part-range` for targets like "this paragraph". The manual describes [all the helpers, with more examples](docs/manual.md#commands-of-your-own).
 
 ## Troubleshooting
 
 Run `M-x earwig-check-setup` first. Beyond what it finds:
 
-| Symptom                                           | Likely cause, and what to do                                                                                                                                                   |
-|---------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Recording shows, but no text ever comes           | The server isn't running: `M-x earwig-speech-server-start`; `M-x earwig-speech-server-log` shows its output                                                                    |
-| The first words are cut off                       | ffmpeg as the recorder: install sox, or with ffmpeg, wait a second before speaking                                                                                              |
-| Holding the space bar only types spaces           | `earwig-push-to-talk` is off, or the key doesn't repeat (press and hold, setup step 3), or repeats more slowly than `earwig-hold-*` expect: set `(setq earwig-hold-debug t)` to log the intervals to *Messages* |
-| A spoken quote, punctuation or command is ignored or comes out wrong | Orukeet may have misheard it, or put punctuation in it: set `(setq earwig-log-transcriptions t)` to log what it wrote to *Messages*, and add a correction for a mishearing that recurs |
-| Dictation stops while the key is still held       | Repeats arrive further apart than `earwig-hold-release-delay`                                                                                                                  |
-| A sentence is split at a pause to think           | Raise `earwig-stream-pause`                                                                                                                                                    |
-| Streaming never ends a segment                    | Background noise counts as speech: raise `earwig-stream-speech-ratio`                                                                                                          |
-| Streaming cuts in the middle of quiet speech      | Lower `earwig-stream-speech-ratio`                                                                                                                                             |
-| The same word keeps coming out wrong              | Fix it once with Cmd-e; it's remembered in `earwig-corrections-learned`                                                                                                        |
-| A command isn't recognized                        | "what can I say"; commands are matched on the whole phrase                                                                                                                     |
+| Symptom                                 | What to do                                                                                              |
+|-----------------------------------------|---------------------------------------------------------------------------------------------------------|
+| Recording shows, but no text ever comes | Start the server, `M-x earwig-speech-server-start`; `M-x earwig-speech-server-log` shows its output     |
+| The first words are cut off             | Install sox; ffmpeg starts recording late                                                               |
+| Holding the space bar only types spaces | Turn on `earwig-push-to-talk`, and turn off press and hold (Setup, step 3)                              |
+| The same word keeps coming out wrong    | Fix it once with Cmd-e; Earwig remembers it                                                             |
+| A command isn't recognized              | Say "what can I say"; a command has to match the whole phrase                                           |
 
-## Files
-
-- `earwig.el`: `earwig-mode`, recording, what happens to a transcription
-- `earwig-server.el`: sending recordings to the speech server, and starting and stopping it
-- `earwig-platform.el`: what differs from one operating system to another
-- `earwig-cleanup.el`: fillers, corrections, spoken punctuation, fitting text in
-- `earwig-commands.el`, `earwig-edit.el`: spoken commands
-- `earwig-structure.el`: headings and lists, as commands and in dictation, and joining sentences
-- `earwig-org.el`: Org TODOs, scheduling and the agenda, as commands
-- `earwig-stream.el`: streaming dictation and provisional text
-- `earwig-hold.el`: tap versus hold, and push-to-talk
-- `earwig-check.el`: `M-x earwig-check-setup`
-- `docs/roadmap/`: what's planned
-- `test/earwig-test.el`: the tests
+The manual has [more](docs/manual.md#troubleshooting), on streaming and push-to-talk timing among others.
 
 ## Development
 
@@ -686,6 +237,8 @@ Run the tests from the repository. `earwig-test-stream` and `earwig-test-record-
 emacs -Q --batch -L . \
   -l test/earwig-test.el -f ert-run-tests-batch-and-exit
 ```
+
+The manual lists the [source files](docs/manual.md#source-files), and [docs/roadmap](docs/roadmap/README.md) what's planned.
 
 ## Acknowledgements
 

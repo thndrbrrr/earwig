@@ -156,6 +156,13 @@ the sox version, and `sox -h | grep DRIVERS`.
 Taken out of the README because none of it has been confirmed on Linux. Put it back, at the places
 named, once the steps above have passed, and correct whatever the tests showed to be wrong.
 
+The README has since been split: its details moved to the manual, `docs/manual.md`. The places
+named below are those of the old README. Most of the Linux text belongs in the manual now: the
+keyboard and microphone details and the input device examples under "Microphone and keyboard
+timing", starting the server outside Emacs under "The speech server", and the Customization entries
+under "Customization reference". The README keeps the intro, the requirements, the install
+commands of setup step 1, the keys table, and the Cmd keys named in its text.
+
 **Intro** (after the paragraph on tapping and holding). The README now says "Earwig runs on macOS.
 Other platforms are on the roadmap." It said:
 

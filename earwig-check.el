@@ -117,7 +117,7 @@
       (list 'fail "Server" (format "not running at %s" url) "M-x earwig-speech-server-start"))
      (t
       (list 'fail "Server" (format "nothing listens at %s" url)
-            "start your speech server, or set earwig-speech-server-command for M-x earwig-speech-server-start; it must answer POST /v1/audio/transcriptions as OpenAI's API does, see README.md")))))
+            "start your speech server, or set earwig-speech-server-command for M-x earwig-speech-server-start; it must answer POST /v1/audio/transcriptions as OpenAI's API does, see docs/manual.md")))))
 
 (defun earwig--check-record (file)
   "Record half a second from the microphone to FILE as raw 16 kHz samples.
