@@ -909,11 +909,11 @@ sox; with ffmpeg, dictation is transcribed when it stops instead, as
       (earwig--record)))
    ((earwig-server-running-p)
     (message "The speech server is still starting"))
-   ((not earwig-server-command)
-    (user-error "No speech server answers at %s: start it, or set `earwig-server-command'"
+   ((not earwig-speech-server-command)
+    (user-error "No speech server answers at %s: start it, or set `earwig-speech-server-command'"
                 (earwig-server-url)))
    ((y-or-n-p "The speech server isn't running.  Start it? ")
-    (earwig-server-start))))
+    (earwig-speech-server-start))))
 
 ;;;###autoload
 (defun earwig-dictate ()

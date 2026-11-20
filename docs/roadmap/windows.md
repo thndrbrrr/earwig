@@ -29,9 +29,9 @@ it warns once that Earwig hasn't been tested there (`earwig--platform-warn`).
 What doesn't need doing:
 
 - **Orukeet's install is no longer Earwig's** (agreed). Earwig talks to whatever server answers
-  at `earwig-server-base-url` and starts one only with `earwig-server-command`. So the
+  at `earwig-speech-server-base-url` and starts one only with `earwig-speech-server-command`. So the
   `.venv/bin` versus `.venv\Scripts\python.exe` question, and a PowerShell port of the old
-  `install.sh`, are gone. A user on Windows gives `earwig-server-command` with their own path.
+  `install.sh`, are gone. A user on Windows gives `earwig-speech-server-command` with their own path.
 - `null-device` already replaces `/dev/null` in earwig-check.el.
 - The text processing, commands, editing, curl requests and WAV writing are plain Emacs Lisp.
 - Telling a tap from a hold relies on key repeat, which Emacs on Windows gets too. Windows'
@@ -76,7 +76,7 @@ What may not carry over:
 5. Check ffmpeg's Windows recording (`-f dshow`, from `earwig--record-command`), as the
    fallback recorder.
 6. Check that F7, F8 and F9 reach Emacs. Check that the speech server can be started and stopped
-   from Emacs with `earwig-server-command`.
+   from Emacs with `earwig-speech-server-command`.
 7. A test plan like [linux-testing.md](linux-testing.md), then the README's setup for Windows.
 
 ## Options considered

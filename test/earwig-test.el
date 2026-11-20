@@ -1050,19 +1050,19 @@ hw:CARD=PCH,DEV=0
 ;;;; The server
 
 (ert-deftest earwig-test-server-settings ()
-  (let ((earwig-server-base-url "http://127.0.0.1:18178/"))
+  (let ((earwig-speech-server-base-url "http://127.0.0.1:18178/"))
     (should (equal (earwig-server-url "/v1/audio/transcriptions")
                    "http://127.0.0.1:18178/v1/audio/transcriptions"))
     (should (equal (earwig-server--address) '("127.0.0.1" . 18178))))
-  (let ((earwig-server-directory "/opt/orukeet")
-        (earwig-server-command '(".venv/bin/python" "local_server.py")))
+  (let ((earwig-speech-server-directory "/opt/orukeet")
+        (earwig-speech-server-command '(".venv/bin/python" "local_server.py")))
     (should (equal (earwig-server--program) "/opt/orukeet/.venv/bin/python"))
-    (let ((earwig-server-command '("whisper-server" "--port" "18178")))
+    (let ((earwig-speech-server-command '("whisper-server" "--port" "18178")))
       (should (equal (earwig-server--program) "whisper-server"))))
   ;; Without a command, starting it is up to you
-  (let ((earwig-server-command nil)
+  (let ((earwig-speech-server-command nil)
         (earwig-server--process nil))
-    (should-error (earwig-server-start) :type 'user-error)
+    (should-error (earwig-speech-server-start) :type 'user-error)
     (should-not (earwig--check-server-command))))
 
 ;;;; Streaming through the server

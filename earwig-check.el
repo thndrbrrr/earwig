@@ -87,20 +87,20 @@
         (list 'fail "curl" "not found" (earwig--install-hint "curl")))))))
 
 (defun earwig--check-server-command ()
-  "Check `earwig-server-command', if it's set."
-  (when earwig-server-command
+  "Check `earwig-speech-server-command', if it's set."
+  (when earwig-speech-server-command
     (let ((directory (earwig-server--directory))
           (program (earwig-server--program)))
       (list
        (cond
         ((not (file-directory-p directory))
          (list 'fail "Server command" (format "no directory %s" directory)
-               "set earwig-server-directory"))
+               "set earwig-speech-server-directory"))
         ((not (if (file-name-directory program)
                   (file-executable-p program)
                 (executable-find program)))
          (list 'fail "Server command" (format "%s not found" program)
-               "set earwig-server-command"))
+               "set earwig-speech-server-command"))
         (t
          (list 'ok "Server command" (abbreviate-file-name program))))))))
 
@@ -112,12 +112,12 @@
       (list 'ok "Server" (format "listening at %s" url)))
      ((earwig-server-running-p)
       (list 'fail "Server" (format "started, but not listening at %s yet" url)
-            "wait for it to load, then press g; M-x earwig-server-log shows its output"))
-     (earwig-server-command
-      (list 'fail "Server" (format "not running at %s" url) "M-x earwig-server-start"))
+            "wait for it to load, then press g; M-x earwig-speech-server-log shows its output"))
+     (earwig-speech-server-command
+      (list 'fail "Server" (format "not running at %s" url) "M-x earwig-speech-server-start"))
      (t
       (list 'fail "Server" (format "nothing listens at %s" url)
-            "start your speech server, or set earwig-server-command for M-x earwig-server-start; it must answer POST /v1/audio/transcriptions as OpenAI's API does, see README.md")))))
+            "start your speech server, or set earwig-speech-server-command for M-x earwig-speech-server-start; it must answer POST /v1/audio/transcriptions as OpenAI's API does, see README.md")))))
 
 (defun earwig--check-record (file)
   "Record half a second from the microphone to FILE as raw 16 kHz samples.
@@ -175,7 +175,7 @@ STATUS is its exit status, for when it said nothing."
               (write-region nil nil wav nil 'silent)))
           (pcase-let ((`(,status . ,output)
                        (earwig--run "curl" "-s" "-o" null-device "-w" "%{http_code} %{time_total}"
-                                    "-F" (concat "model=" earwig-server-model)
+                                    "-F" (concat "model=" earwig-speech-server-model)
                                     "-F" "response_format=text"
                                     "-F" (concat "file=@" wav)
                                     (earwig-server-url "/v1/audio/transcriptions"))))
@@ -184,7 +184,7 @@ STATUS is its exit status, for when it said nothing."
                                                   (string-to-number (substring output 4))))
               (list 'fail "Transcription" (format "request failed: %s" output)
                     (if (earwig-server-running-p)
-                        "M-x earwig-server-log"
+                        "M-x earwig-speech-server-log"
                       "see the speech server's log")))))
       (delete-file wav))))
 
