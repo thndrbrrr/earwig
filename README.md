@@ -4,20 +4,22 @@
 
 Earwig is a dictation and voice commands package for Emacs, inspired by [Sacha Chua's speech recognition setup](https://sachachua.com/blog/category/speech-recognition/).
 
-Earwig supports push-to-talk alongside tap-to-toggle, streaming transcription that shows words as you say them, a grammar of editing commands, and corrections it learns. Speech is transcribed locally, by [Orukeet](https://github.com/Oruk-AI/orukeet), a Parakeet-based model running on the CPU, or any other server with OpenAI's transcription API.
+Earwig supports push-to-talk, streaming transcription that shows words as you say them, a grammar of editing commands, and corrections it learns. Speech is transcribed locally by [Orukeet](https://github.com/Oruk-AI/orukeet).
 
-Tap a key to talk and tap it again to stop, or turn on push-to-talk and hold the space bar down while you talk. Dictation is cleaned up and fitted to where it goes, and spoken commands edit text by a verb and a target: "select last two words", "replace Monday with Tuesday in this paragraph", "format bold from results until breakthrough". 
+Tap a key to talk and tap it again to stop, or use push-to-talk and hold the space bar down while you talk. Dictation is cleaned up and fitted to where it goes, and spoken commands edit text by a verb and a target: "select last two words", "replace Monday with Tuesday in this paragraph", "format bold from results until breakthrough". 
 
-Earwig runs on macOS and (presumably) on Linux. Linux support is new and hasn't been tried on Linux itself yet; [docs/roadmap/linux-testing.md](docs/roadmap/linux-testing.md) is the plan for that. Windows is [on the roadmap](docs/roadmap/windows.md).
+Earwig runs on macOS. Other platforms are [on the roadmap](docs/roadmap/README.md).
 
 > [!NOTE]
 > [Claude](https://claude.ai) wrote most of it, while I spent decades in software engineering learning what to make, what to keep, and what to throw away. ¯\\_(ツ)\_/¯
 
 ## Requirements
 
-- macOS or Linux, and Emacs 29.1 or newer
-- sox (recommended) for recording, on Linux with its pulseaudio or alsa driver; or ffmpeg, which can't stream and on macOS loses about the first second. And curl.
-- A speech server: [Orukeet](https://github.com/Oruk-AI/orukeet), installed on its own (it needs Python 3.12 or newer), or another one with the same API
+- macOS
+- Emacs 29.1 or newer
+- curl
+- sox (recommended) for recording; or ffmpeg (which doesn't support streaming though)
+- [Orukeet](https://github.com/Oruk-AI/orukeet) with its speech server (requires Python 3.12)
 
 ## Installation
 
@@ -45,23 +47,19 @@ Alternatively, clone the repository, add its directory to your `load-path`, and 
 1. **Tools.** A recorder, sox or ffmpeg, and curl. sox is the one to have: it starts recording sooner, and only it can stream, showing text while you talk.
 
    ```sh
-   brew install sox                                             # macOS
-   sudo apt install sox libsox-fmt-pulse libsox-fmt-alsa curl   # Debian, Ubuntu
-   sudo dnf install sox curl                                    # Fedora
+   brew install sox
    ```
 
    Or, if you'd rather use ffmpeg, or already have it:
 
    ```sh
-   brew install ffmpeg                                      # macOS
-   sudo apt install ffmpeg curl                             # Debian, Ubuntu
-   sudo dnf install ffmpeg-free curl                        # Fedora, or ffmpeg from RPM Fusion
+   brew install ffmpeg
    ```
 
    Earwig records with sox if it's installed and with ffmpeg otherwise; `earwig-recorder` chooses one. With ffmpeg, dictation is transcribed when you stop rather than while you talk.
 
-2. **The speech server.** Earwig doesn't install one. It sends each recording to `earwig-server-base-url` (`http://127.0.0.1:18178` by default), and needs a server there that:
-   - answers OpenAI's `POST /v1/audio/transcriptions`, with `file`, `model` (`earwig-server-model`, `"orukeet"`) and `response_format=text`, with the transcription as plain text;
+2. **The speech server.** The speech server is a separate program that does the transcribing; Earwig doesn't include or install one. Earwig sends each recording to `earwig-speech-server-base-url` (`http://127.0.0.1:18178` by default), and needs a server there that:
+   - answers OpenAI's `POST /v1/audio/transcriptions`, with `file`, `model` (`earwig-speech-server-model`, `"orukeet"`) and `response_format=text`, with the transcription as plain text;
    - only listens once it's ready to transcribe, as Earwig takes a listening server for a ready one.
 
    Orukeet's `local_server.py` is such a server. It isn't part of the Orukeet package: it's an example in Orukeet's repository, so you download it, and its requirements, next to the installation. All of it goes in a directory of its own, such as `~/.local/share/orukeet` (see Orukeet's [local server guide](https://github.com/Oruk-AI/orukeet/blob/main/examples/local-server.md)):
@@ -78,26 +76,39 @@ Alternatively, clone the repository, add its directory to your `load-path`, and 
    .venv/bin/pip install -r local-server-requirements.txt
    ```
 
-   The directory then holds `.venv/`, `orukeet-cache/`, `installation.json`, `local_server.py` and `local-server-requirements.txt`. The runtime and model take about 700 MB. The server listens on port 8000 unless told otherwise, so Earwig starts it with `--port 18178`, the port of `earwig-server-base-url`. To have Earwig start and stop the server (`M-x earwig-server-start`), tell it how:
+   The directory then holds `.venv/`, `orukeet-cache/`, `installation.json`, `local_server.py` and `local-server-requirements.txt`. The runtime and model take about 700 MB. To have Earwig start and stop the server (`M-x earwig-speech-server-start`), add the configuration below. The speech server per default listens on port 8000, and since this is a pretty common local port, you should probably start it with a different port (`--port 18178` in the example below):
 
    ```elisp
-   (setopt earwig-server-directory "~/.local/share/orukeet"
-           earwig-server-command '(".venv/bin/python" "local_server.py"
+   ;; Package-style install
+   (use-package earwig
+     :vc (:url "https://github.com/thndrbrrr/earwig" :rev :newest)
+     :custom
+     (earwig-speech-server-directory "~/.local/share/orukeet")
+     (earwig-speech-server-command '(".venv/bin/python" "local_server.py"
+                              "--installation" "installation.json"
+                              "--port" "18178"))
+     (earwig-speech-server-base-url "http://127.0.0.1:18178")
+     :config
+     (earwig-mode 1))
+	 
+   ;; Cloned repo install
+   (setopt earwig-speech-server-directory "~/.local/share/orukeet"
+           earwig-speech-server-command '(".venv/bin/python" "local_server.py"
                                    "--installation" "installation.json"
-                                   "--port" "18178"))
+                                   "--port" "18178")
+           earwig-speech-server-base-url "http://127.0.0.1:18178")
    ```
 
-   `M-x earwig-server-stop` stops it again, asking it to shut down and killing it after `earwig-server-stop-timeout` seconds (10), and `M-x earwig-server-toggle` does either; `M-x earwig-server-log` shows its output. Dictating while no server answers offers to start it.
+   `M-x earwig-speech-server-stop` stops it again, asking it to shut down and killing it after `earwig-speech-server-stop-timeout` seconds (10), and `M-x earwig-speech-server-toggle` does either; `M-x earwig-speech-server-log` shows its output. Dictating while no server answers offers to start it.
 
-   Or leave `earwig-server-command` unset and start the server yourself, at login with launchd or a `systemd --user` unit for one; Earwig uses whatever listens at `earwig-server-base-url`. From its directory, that's:
+   Or leave `earwig-speech-server-command` unset and start the server yourself, at login with launchd for one; Earwig uses whatever listens at `earwig-speech-server-base-url`. From its directory, that's:
 
    ```sh
    .venv/bin/python local_server.py --installation installation.json --port 18178
    ```
 
-3. **Keyboard and microphone.** Push-to-talk tells a held key from a tap by the key repeating, so it depends on the keyboard settings. The defaults of `earwig-hold-*` are on the safe side: they suit a repeat that starts within about 1.1 s and comes every 100 ms or faster, which takes in what macOS, GNOME, KDE and X11 start with. Faster settings let smaller `earwig-hold-*` values notice a hold, and its release, sooner; `earwig-check-setup` (step 5) reads the settings and suggests the values (see step 4).
+3. **Keyboard and microphone (optional).** Push-to-talk tells a held key from a tap by the key repeating, so it depends on the keyboard settings. The defaults of `earwig-hold-*` are on the safe side: they suit a repeat that starts within about 1.1 s and comes every 100 ms or faster, which takes in what macOS starts with. Faster settings let smaller `earwig-hold-*` values notice a hold, and its release, sooner; `earwig-check-setup` (step 5) reads the settings and suggests the values (see step 4).
 
-   On **macOS**:
    - Holding a key must repeat it rather than show the accent menu:
 
      ```sh
@@ -114,23 +125,10 @@ Alternatively, clone the repository, add its directory to your `load-path`, and 
      These take effect after logging out and in again; the press and hold setting only needs Emacs restarted.
    - macOS asks for microphone access the first time Emacs records. If it was denied, allow Emacs under System Settings › Privacy & Security › Microphone.
 
-   On **Linux**:
-   - Key repeat is in the desktop's keyboard settings. On GNOME, or under X11:
-
-     ```sh
-     gsettings set org.gnome.desktop.peripherals.keyboard delay 250
-     gsettings set org.gnome.desktop.peripherals.keyboard repeat-interval 30
-     xset r rate 250 33                           # X11: 250 ms, then 33 a second
-     ```
-
-     `earwig-check-setup` reads it from GNOME or KDE under Wayland, and from the X server under X11. On other Wayland desktops it can't: measure with `(setq earwig-hold-debug t)`.
-   - Earwig records through PulseAudio, which PipeWire serves too, or ALSA without a sound server (`earwig-audio-driver`). If the microphone records only silence, check it isn't muted, e.g. with pavucontrol. An Emacs from Flatpak or Snap may not be able to record.
-
 4. **Options.** Earwig records from the input chosen in the system's sound settings. To pick another, and to fit the timing to your keyboard and microphone:
 
    ```elisp
-   (setq earwig-input-device "Display Audio")  ; macOS: a CoreAudio input name
-   (setq earwig-input-device "alsa_input.usb-Blue_Yeti-00.analog-stereo")  ; Linux: a PulseAudio source
+   (setq earwig-input-device "Display Audio")  ; a CoreAudio input name
 
    ;; Holding a key: these suit the fastest key repeat, 250 ms then every 33 ms
    (setq earwig-hold-initial-window  0.4
@@ -148,7 +146,7 @@ Alternatively, clone the repository, add its directory to your `load-path`, and 
 5. **Check.** Start the server and check the setup until everything is ✓:
 
    ```
-   M-x earwig-server-start     ; with earwig-server-command; Orukeet takes up to ~20 s to load
+   M-x earwig-speech-server-start     ; with earwig-speech-server-command; Orukeet takes up to ~20 s to load
    M-x earwig-check-setup
    ```
 
@@ -158,19 +156,17 @@ Alternatively, clone the repository, add its directory to your `load-path`, and 
 
 ## Usage
 
-| macOS                       | Linux             | Tap                                                                | Hold                     |
-|-----------------------------|-------------------|--------------------------------------------------------------------|--------------------------|
-| Cmd-d, keypad 0             | F7, keypad 0      | start dictation; tap again to stop                                 |                          |
-| Cmd-f, keypad Enter         | F8, keypad Enter  | start a voice command; tap again to stop                           |                          |
-| Cmd-e, keypad `.`           | F9, keypad `.`    | correct the word before point (or the region) and remember the fix |                          |
-| Space, with push-to-talk on | the same          | types a space                                                      | dictate until you let go |
-| C-g, while recording        | the same          | cancel a command, or dictation that doesn't stream                 |                          |
-
-On Linux the desktop keeps the Super key, Emacs's name for Cmd, for itself, so the function keys take its place.
+| Key                         | Tap                                                                | Hold                     |
+|-----------------------------|--------------------------------------------------------------------|--------------------------|
+| Cmd-d, keypad 0             | start dictation; tap again to stop                                 |                          |
+| Cmd-f, keypad Enter         | start a voice command; tap again to stop                           |                          |
+| Cmd-e, keypad `.`           | correct the word before point (or the region) and remember the fix |                          |
+| Space, with push-to-talk on | types a space                                                      | dictate until you let go |
+| C-g, while recording        | cancel a command, or dictation that doesn't stream                 |                          |
 
 The voice keys are in two options, each a list of `(KEY . MODE)` with MODE `dictate` or `command`. Set them with `setopt` or Customize.
 
-- **`earwig-toggle-keys`**: tapped, the key starts recording, and tapped again stops it. These are Cmd-d (F7 on Linux) and keypad 0 for dictation, Cmd-f (F8) and keypad Enter for commands.
+- **`earwig-toggle-keys`**: tapped, the key starts recording, and tapped again stops it. These are Cmd-d and keypad 0 for dictation, Cmd-f and keypad Enter for commands.
 - **`earwig-push-to-talk-keys`**: held down, the key records until you let go. This is the space bar for dictation, and it's off until you turn on push-to-talk.
 
 The commands `earwig-dictate` and `earwig-command` do the same for a key of your own, bound in any keymap, or from `M-x`: tapped they toggle, held they record until you let go.
@@ -201,7 +197,7 @@ Any key can push to talk, and a key in both lists does either: tapped it toggles
 - Both are described in full under [Speaking commands and dictation](#speaking-commands-and-dictation).
 - **Streaming** (`earwig-streaming`, on by default): text appears while you talk, provisional (grey, or blue for a command after "okay") until a pause, then final. It needs sox; when ffmpeg records, dictation is transcribed when you stop instead, and *Messages* says so once.
 - **Typing over provisional text:** in dictation started with a tap, pressing a key while provisional text shows puts it in as it stands, and the key does what it does after it. Punctuation you type (`. , : ; ! ? … — – -`, in `earwig-stream-flush-punctuation`) replaces the period or comma the text ends with, so `,` after "Hello there." gives "Hello there,". Typed right after any dictation you haven't edited, streamed or not, it does the same. The space bar as a push-to-talk key does this too, so tapping it ends the segment with a space. What you say next is transcribed on its own. Dictation pushed to talk waits for the final text as usual, and so do the other voice keys, a click, and a command after "okay". `earwig-stream-flush-on-key` turns this off.
-- **Corrections:** Cmd-e (F9 on Linux) fixes a misheard word and remembers "wrong => right" in `earwig-corrections-learned`, saved by Customize and applied to every transcription from then on; with C-u it also fixes the rest of the buffer. Corrections of your own go in `earwig-corrections`, and those only for commands in `earwig-corrections-commands`; all are matched as whole words, ignoring case:
+- **Corrections:** Cmd-e fixes a misheard word and remembers "wrong => right" in `earwig-corrections-learned`, saved by Customize and applied to every transcription from then on; with C-u it also fixes the rest of the buffer. Corrections of your own go in `earwig-corrections`, and those only for commands in `earwig-corrections-commands`; all are matched as whole words, ignoring case:
 
   ```elisp
   (setopt earwig-corrections
@@ -226,7 +222,7 @@ Any key can push to talk, and a key in both lists does either: tapped it toggles
 
 ### How a command is recognized
 
-- Tap Cmd-f (F8 on Linux, or keypad Enter), or use another key with the mode `command`, and say the command. Tap it again
+- Tap Cmd-f (or keypad Enter), or use another key with the mode `command`, and say the command. Tap it again
   when you're done, or have a pause end it: with `(setopt
   earwig-command-auto-stop 1.5)`, recording stops after 1.5 s of
   silence once what you've said is a complete command (or ends with
@@ -555,6 +551,7 @@ punctuation around them goes ("tomorrow, period." becomes "tomorrow.").
 
 - `earwig-with-input` calls a command with text typed into its first prompt.
 - `earwig-downcase-first-word` undoes the capital Orukeet gives the first word.
+- `earwig-parse-number` returns the number a spoken group says, in digits or words: "42", "forty-two", "one hundred and five", "a thousand", "1,000", "2 million". Numbers said one after another make one of all their digits, so "one one" is 11, "nineteen eighty-four" 1984 and "five twenty" 520, and a decimal after "point" or "decimal" ("two point five", "2.5") gives a float. Anything else signals an error that says what it couldn't read, `Can't parse number "five hundred hundred": "hundred" after "hundred"`, and the command fails with it. With a second argument, a decimal fails too ("Not a whole number"); with a third, it returns nil instead of failing. Match the group with `\\(.+\\)` rather than digits, as Orukeet may write the number either way.
 - `earwig-raw-command` is the command as transcribed while it runs, with its punctuation, for passing on what was said.
 - `earwig-part-range` returns `(BEG . END)` of a part of the buffer, named as the editing commands' targets are: "last two sentences", "this paragraph", "that", "the whole buffer", or nil for the selection. It returns nil for anything else, such as words to look for, and signals a `user-error` if the part isn't there.
 - `earwig-when-regexp` matches a spoken date ("today", "tomorrow", "next week", "next month", "on Friday"), and `earwig-spoken-time` makes it a time, as "schedule" does. They're in `earwig-org.el`, as `earwig-spoken-time` uses Org's date reading.
@@ -619,12 +616,12 @@ Some of Earwig's commands use consult when it's installed: "search", "switch to 
 
 ## Customization
 
-All options live under `M-x customize-group RET earwig RET`, the server, streaming and hold timing in subgroups.
+All options live under `M-x customize-group RET earwig RET`, the speech server, streaming and hold timing in subgroups.
 
 - **`earwig-input-device`** – The microphone to record from (`"default"`: the one chosen in the system's sound settings), named as the audio driver names it.
 - **`earwig-recorder`** – `sox`, `ffmpeg`, or `auto` (sox if it's installed), for dictation and commands.
 - **`earwig-recording-timeout`** – Seconds after which a recording that isn't streamed, a command or dictation without streaming, stops by itself (300; nil for no limit).
-- **`earwig-audio-driver`**, **`earwig-pulse-latency`** – The driver sox records through (`auto`: coreaudio on macOS; pulseaudio, or alsa without a sound server, on Linux), and how much audio PulseAudio hands it at a time.
+- **`earwig-audio-driver`** – The driver sox records through (`auto`: coreaudio on macOS).
 - **`earwig-toggle-keys`**, **`earwig-correct-keys`** – The keys of `earwig-mode` that toggle recording when tapped, and those that correct.
 - **`earwig-push-to-talk`**, **`earwig-push-to-talk-keys`** – Whether there's push-to-talk (off by default), and the keys that record while held (the space bar).
 - **`earwig-wake-word-commands`**, **`earwig-wake-words`** – Whether you can give commands while dictating by saying "okay" first (on by default), and the words for that.
@@ -632,7 +629,7 @@ All options live under `M-x customize-group RET earwig RET`, the server, streami
 - **`earwig-cancel-words`** – Words that, said last, cancel a command (`"cancel"`, `"never mind"`).
 - **`earwig-command-auto-stop`**, **`earwig-command-auto-stop-incomplete`** – Seconds of silence after a complete voice command started with a tap that stop its recording (nil, off: only the key stops it), and after what isn't a command yet (3; nil to wait for the key).
 - **`earwig-command-preview`**, **`earwig-provisional-command-display`** – Whether a command said with a command key shows in the echo area as you say it (on), and whether a command given while dictating shows in the buffer (the default) or the echo area.
-- **`earwig-corrections`**, **`earwig-corrections-commands`**, **`earwig-corrections-learned`** – "Wrong => right" corrections: for every transcription, for commands only, and those made with Cmd-e (F9).
+- **`earwig-corrections`**, **`earwig-corrections-commands`**, **`earwig-corrections-learned`** – "Wrong => right" corrections: for every transcription, for commands only, and those made with Cmd-e.
 - **`earwig-filler-words`**, **`earwig-keep-capitalized`** – Words dropped from dictation, and words that keep their capital mid-sentence.
 - **`earwig-format-dictation`**, **`earwig-spoken-format`**, **`earwig-literal-word`** – Spoken punctuation in dictation.
 - **`earwig-log-transcriptions`** – Log each transcription to *Messages*, as Orukeet wrote it and what Earwig made of it (off by default): to see which words are misheard again and again, for `earwig-corrections`, or where spoken punctuation goes wrong.
@@ -644,9 +641,9 @@ All options live under `M-x customize-group RET earwig RET`, the server, streami
 - **`earwig-streaming`** and **`earwig-stream-*`** – Streaming (on by default; needs sox, and with ffmpeg dictation is transcribed when you stop, as *Messages* notes once), the pause that ends a segment, how loud speech is against the noise, provisional text.
 - **`earwig-hold-*`** – Telling a held key, push-to-talk, from a tap.
 - **Faces** – `earwig-mode-line-recording` (red), `earwig-mode-line-command` (blue) and `earwig-mode-line-transcribing` for REC, CMD and STT in the mode line, and their icons ● and ▶ (`earwig-recording-icon`, `earwig-command-icon`), also before provisional text; `earwig-provisional` for provisional text, and `earwig-provisional-command` for that of a command said while dictating (unset, it takes the color of CMD).
-- **`earwig-server-base-url`**, **`earwig-server-model`** – Where the speech server listens, and the model name sent to it.
-- **`earwig-server-command`**, **`earwig-server-directory`** – How `M-x earwig-server-start` starts the server, and where; unset, it's started outside Emacs.
-- **`earwig-server-stop-timeout`** – Seconds `M-x earwig-server-stop` waits for the server to shut down before killing it.
+- **`earwig-speech-server-base-url`**, **`earwig-speech-server-model`** – The address of the speech server Earwig sends recordings to, and the model name it asks for.
+- **`earwig-speech-server-command`**, **`earwig-speech-server-directory`** – How `M-x earwig-speech-server-start` runs the speech server as a subprocess of Emacs, and in which directory; unset, you start the server outside Emacs.
+- **`earwig-speech-server-stop-timeout`** – Seconds `M-x earwig-speech-server-stop` waits for the server to shut down before killing it.
 - **`earwig-check-app-id`** – The macOS bundle identifier of Emacs, whose press-and-hold setting `earwig-check-setup` reads.
 
 ## Troubleshooting
@@ -655,8 +652,7 @@ Run `M-x earwig-check-setup` first. Beyond what it finds:
 
 | Symptom                                           | Likely cause, and what to do                                                                                                                                                   |
 |---------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Recording shows, but no text ever comes           | The server isn't running: `M-x earwig-server-start`; `M-x earwig-server-log` shows its output                                                                                  |
-| "no handler for given file type `pulseaudio'"     | sox lacks the driver: on Debian and Ubuntu install `libsox-fmt-pulse` (or `libsox-fmt-alsa`), or set `earwig-audio-driver` to one sox has                                     |
+| Recording shows, but no text ever comes           | The server isn't running: `M-x earwig-speech-server-start`; `M-x earwig-speech-server-log` shows its output                                                                    |
 | The first words are cut off                       | ffmpeg as the recorder: install sox, or with ffmpeg, wait a second before speaking                                                                                              |
 | Holding the space bar only types spaces           | `earwig-push-to-talk` is off, or the key doesn't repeat (press and hold, setup step 3), or repeats more slowly than `earwig-hold-*` expect: set `(setq earwig-hold-debug t)` to log the intervals to *Messages* |
 | A spoken quote, punctuation or command is ignored or comes out wrong | Orukeet may have misheard it, or put punctuation in it: set `(setq earwig-log-transcriptions t)` to log what it wrote to *Messages*, and add a correction for a mishearing that recurs |
@@ -664,14 +660,14 @@ Run `M-x earwig-check-setup` first. Beyond what it finds:
 | A sentence is split at a pause to think           | Raise `earwig-stream-pause`                                                                                                                                                    |
 | Streaming never ends a segment                    | Background noise counts as speech: raise `earwig-stream-speech-ratio`                                                                                                          |
 | Streaming cuts in the middle of quiet speech      | Lower `earwig-stream-speech-ratio`                                                                                                                                             |
-| The same word keeps coming out wrong              | Fix it once with Cmd-e (F9); it's remembered in `earwig-corrections-learned`                                                                                                        |
+| The same word keeps coming out wrong              | Fix it once with Cmd-e; it's remembered in `earwig-corrections-learned`                                                                                                        |
 | A command isn't recognized                        | "what can I say"; commands are matched on the whole phrase                                                                                                                     |
 
 ## Files
 
 - `earwig.el`: `earwig-mode`, recording, what happens to a transcription
-- `earwig-server.el`: the speech server, and starting and stopping it
-- `earwig-platform.el`: what differs between macOS, Linux and Windows
+- `earwig-server.el`: sending recordings to the speech server, and starting and stopping it
+- `earwig-platform.el`: what differs from one operating system to another
 - `earwig-cleanup.el`: fillers, corrections, spoken punctuation, fitting text in
 - `earwig-commands.el`, `earwig-edit.el`: spoken commands
 - `earwig-structure.el`: headings and lists, as commands and in dictation, and joining sentences
@@ -679,12 +675,12 @@ Run `M-x earwig-check-setup` first. Beyond what it finds:
 - `earwig-stream.el`: streaming dictation and provisional text
 - `earwig-hold.el`: tap versus hold, and push-to-talk
 - `earwig-check.el`: `M-x earwig-check-setup`
-- `docs/roadmap/`: what's planned, Linux testing and Windows among it
+- `docs/roadmap/`: what's planned
 - `test/earwig-test.el`: the tests
 
 ## Development
 
-Run the tests from the repository. `earwig-test-stream` and `earwig-test-record-runs-whole` send speech made by macOS's `say` through the server, and are skipped unless both are there. `earwig-test-paste-evil` is skipped unless evil is on the load path (add `-L path/to/evil`). The Linux code is tested on macOS too, with `system-type` bound and the programs' output given:
+Run the tests from the repository. `earwig-test-stream` and `earwig-test-record-runs-whole` send speech made by macOS's `say` through the server, and are skipped unless both are there. `earwig-test-paste-evil` is skipped unless evil is on the load path (add `-L path/to/evil`).
 
 ```sh
 emacs -Q --batch -L . \

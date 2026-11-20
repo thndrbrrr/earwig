@@ -4,9 +4,10 @@ The Linux code is written, but nobody has run it on Linux yet. earwig-platform.e
 branch for everything that differs from macOS. Its tests pass on macOS, which binds
 `system-type` to `gnu/linux` and feeds them what the Linux programs would print. Nothing has
 recorded a microphone, read a real key repeat or started a server on Linux. This plan is for
-doing that, on a real machine or a VM that passes the microphone through. When it has been run
-and what it finds is fixed, the README says Linux is supported without reservation, and this
-document goes. Windows is a separate item: [windows.md](windows.md).
+doing that, on a real machine or a VM that passes the microphone through. Until then the README
+documents macOS only: its Linux text was taken out and is kept below, under "README text to
+restore". When the plan has been run and what it finds is fixed, that text goes back into the
+README, corrected by what the tests found, and this document goes. Windows is a separate item: [windows.md](windows.md).
 
 ## Background: what's built
 
@@ -23,11 +24,11 @@ Decided while this was built:
   as on macOS (`earwig--default-keys`).
 - **Orukeet is installed separately.** `orukeet/install.sh` and the launchd plist were taken
   out. Earwig needs only these:
-  - `earwig-server-base-url`, the address of the server.
-  - `earwig-server-model`, the model name it sends.
-  - Optionally `earwig-server-command` and `earwig-server-directory`, to start the server
+  - `earwig-speech-server-base-url`, the address of the server.
+  - `earwig-speech-server-model`, the model name it sends.
+  - Optionally `earwig-speech-server-command` and `earwig-speech-server-directory`, to start the server
     from Emacs.
-  - The server must answer OpenAI's POST /v1/audio/transcriptions, take language "auto", and
+  - The server must answer OpenAI's POST /v1/audio/transcriptions with plain text, and
     listen only once it's ready.
 - **Linux tests that don't need audio or Linux tools run on macOS**, in test/earwig-test.el
   under ";;;; Platforms" and ";;;; The server":
@@ -52,7 +53,7 @@ What the Linux branch does, and so what to check:
 | PulseAudio latency | sox runs as `env PULSE_LATENCY_MSEC=30 sox …` (`earwig-pulse-latency`, nil for libpulse's default). 30 ms is a guess, not measured | `earwig--sox-program` |
 | ffmpeg | `-f pulse` if a sound server runs, else `-f alsa`; the device is `earwig-input-device` as it is | `earwig--ffmpeg-input-format`, `earwig--ffmpeg-input-device` |
 | Stopping a recorder | SIGINT (`interrupt-process`), as on macOS; env replaces itself with sox, so sox gets it | `earwig--stop-recorder` |
-| Stopping the server | SIGINT, then `delete-process` after `earwig-server-stop-timeout` | `earwig--interrupt-server`, `earwig-server-stop` |
+| Stopping the server | SIGINT, then `delete-process` after `earwig-speech-server-stop-timeout` | `earwig--interrupt-server`, `earwig-speech-server-stop` |
 | Microphones | `pactl list short sources`, without `.monitor` sources, with pulseaudio; `arecord -L`, without `null`, with alsa | `earwig--input-devices` |
 | Key repeat | Wayland (`$WAYLAND_DISPLAY`): GNOME's gsettings (`org.gnome.desktop.peripherals.keyboard` `repeat`, `delay`, `repeat-interval`) or KDE's `kreadconfig6`/`kreadconfig5` (`kcminputrc` Keyboard `RepeatDelay`, `RepeatRate`); other Wayland desktops: unknown. X11 (`$DISPLAY`): `xset q`. `off` if repeat is off | `earwig--linux-key-repeat` |
 | Install hints | apt, dnf, pacman or zypper, whichever is installed. On apt, sox is `sox libsox-fmt-pulse libsox-fmt-alsa`; a missing driver suggests `libsox-fmt-pulse` or `libsox-fmt-alsa` | `earwig--install-hint`, `earwig--sox-driver-hint` |
@@ -77,20 +78,20 @@ the sox version, and `sox -h | grep DRIVERS`.
 
 ### 1. Setting up
 
-1. Install sox and curl following the README. On Ubuntu, first try `sudo apt install
-   sox` alone and run step 3. That shows whether `sox` pulls in the driver packages through
+1. Install sox and curl following "README text to restore" below. On Ubuntu, first try
+   `sudo apt install sox` alone and run step 3. That shows whether `sox` pulls in the driver packages through
    Recommends, which nobody checked. Then add `libsox-fmt-pulse libsox-fmt-alsa`.
-2. Install Orukeet following its own instructions. Set `earwig-server-command` and
-   `earwig-server-directory` as the README shows, with `.venv/bin/python`.
+2. Install Orukeet following its own instructions. Set `earwig-speech-server-command` and
+   `earwig-speech-server-directory` as the README shows, with `.venv/bin/python`.
 3. Run the test suite (README, Development). Everything but `earwig-test-stream` should pass,
    which skips without `say`.
 
 ### 2. earwig-check-setup
 
 1. `M-x earwig-check-setup` with the server stopped. Server should fail with "M-x
-   earwig-server-start", and Transcription shouldn't appear.
-2. `M-x earwig-server-start`. "Speech server ready at …" should come once the model is loaded.
-   `M-x earwig-server-log` shows its output. Press `g` in the report: everything should be ✓.
+   earwig-speech-server-start", and Transcription shouldn't appear.
+2. `M-x earwig-speech-server-start`. "Speech server ready at …" should come once the model is loaded.
+   `M-x earwig-speech-server-log` shows its output. Press `g` in the report: everything should be ✓.
 3. Note what each line says:
    - Audio driver: pulseaudio is expected on environments 1–3.
    - Microphone level.
@@ -143,12 +144,114 @@ the sox version, and `sox -h | grep DRIVERS`.
 
 ### 5. The server
 
-1. `earwig-server-stop`. The server should exit on SIGINT well within
-   `earwig-server-stop-timeout`, and the log should say it shut down cleanly.
+1. `earwig-speech-server-stop`. The server should exit on SIGINT well within
+   `earwig-speech-server-stop-timeout`, and the log should say it shut down cleanly.
 2. Start the server outside Emacs, from a shell or a `systemd --user` unit. Recording should use
-   it, and `earwig-server-start` should refuse ("Something already listens at …").
-3. Without `earwig-server-command`, dictating with no server should say "No speech server
-   answers at …: start it, or set `earwig-server-command'".
+   it, and `earwig-speech-server-start` should refuse ("Something already listens at …").
+3. Without `earwig-speech-server-command`, dictating with no server should say "No speech server
+   answers at …: start it, or set `earwig-speech-server-command'".
+
+## README text to restore
+
+Taken out of the README because none of it has been confirmed on Linux. Put it back, at the places
+named, once the steps above have passed, and correct whatever the tests showed to be wrong.
+
+**Intro** (after the paragraph on tapping and holding). The README now says "Earwig runs on macOS.
+Other platforms are on the roadmap." It said:
+
+> Earwig runs on macOS and (presumably) on Linux. Linux support is pending, and Windows is [on the
+> roadmap](docs/roadmap/windows.md).
+
+**Requirements.** `- macOS or Linux` in place of `- macOS`, and the sox line:
+
+> - sox (recommended) for recording, on Linux with its pulseaudio or alsa driver; or ffmpeg (which
+>   doesn't support streaming though)
+
+**Setup, step 1 (Tools).** The install commands, with comments naming the system:
+
+```sh
+brew install sox                                             # macOS
+sudo apt install sox libsox-fmt-pulse libsox-fmt-alsa curl   # Debian, Ubuntu
+sudo dnf install sox curl                                    # Fedora
+```
+
+```sh
+brew install ffmpeg                                      # macOS
+sudo apt install ffmpeg curl                             # Debian, Ubuntu
+sudo dnf install ffmpeg-free curl                        # Fedora, or ffmpeg from RPM Fusion
+```
+
+**Setup, step 2 (The speech server).** Starting the server outside Emacs: "at login with launchd
+or a `systemd --user` unit for one" (now only launchd; step 5.2 above tests the unit).
+
+**Setup, step 3 (Keyboard and microphone).** The defaults of `earwig-hold-*` suit "what macOS,
+GNOME, KDE and X11 start with" (now "what macOS starts with"). The macOS bullets were headed
+`On **macOS**:`, and after them came:
+
+````markdown
+   On **Linux**:
+   - Key repeat is in the desktop's keyboard settings. On GNOME, or under X11:
+
+     ```sh
+     gsettings set org.gnome.desktop.peripherals.keyboard delay 250
+     gsettings set org.gnome.desktop.peripherals.keyboard repeat-interval 30
+     xset r rate 250 33                           # X11: 250 ms, then 33 a second
+     ```
+
+     `earwig-check-setup` reads it from GNOME or KDE under Wayland, and from the X server under X11. On other Wayland desktops it can't: measure with `(setq earwig-hold-debug t)`.
+   - Earwig records through PulseAudio, which PipeWire serves too, or ALSA without a sound server (`earwig-audio-driver`). If the microphone records only silence, check it isn't muted, e.g. with pavucontrol. An Emacs from Flatpak or Snap may not be able to record.
+````
+
+**Setup, step 4 (Options).** The input device examples:
+
+```elisp
+(setq earwig-input-device "Display Audio")  ; macOS: a CoreAudio input name
+(setq earwig-input-device "alsa_input.usb-Blue_Yeti-00.analog-stereo")  ; Linux: a PulseAudio source
+```
+
+**Usage.** The key table had a Linux column, and a sentence after it:
+
+```markdown
+| macOS                       | Linux             | Tap                                                                | Hold                     |
+|-----------------------------|-------------------|--------------------------------------------------------------------|--------------------------|
+| Cmd-d, keypad 0             | F7, keypad 0      | start dictation; tap again to stop                                 |                          |
+| Cmd-f, keypad Enter         | F8, keypad Enter  | start a voice command; tap again to stop                           |                          |
+| Cmd-e, keypad `.`           | F9, keypad `.`    | correct the word before point (or the region) and remember the fix |                          |
+| Space, with push-to-talk on | the same          | types a space                                                      | dictate until you let go |
+| C-g, while recording        | the same          | cancel a command, or dictation that doesn't stream                 |                          |
+
+On Linux the desktop keeps the Super key, Emacs's name for Cmd, for itself, so the function keys take its place.
+```
+
+**The Linux keys in the text.** Wherever a Cmd key is named:
+
+- `earwig-toggle-keys`: "Cmd-d (F7 on Linux) and keypad 0 for dictation, Cmd-f (F8) and keypad
+  Enter for commands".
+- Corrections, under Usage: "Cmd-e (F9 on Linux) fixes a misheard word".
+- How a command is recognized: "Tap Cmd-f (F8 on Linux, or keypad Enter)".
+- Customization, `earwig-corrections-learned`: "those made with Cmd-e (F9)".
+- Troubleshooting, the same word coming out wrong: "Fix it once with Cmd-e (F9)".
+
+**Customization.** The audio driver entry, with the PulseAudio option:
+
+> - **`earwig-audio-driver`**, **`earwig-pulse-latency`** – The driver sox records through
+>   (`auto`: coreaudio on macOS; pulseaudio, or alsa without a sound server, on Linux), and how
+>   much audio PulseAudio hands it at a time.
+
+**Troubleshooting.** A row after "Recording shows, but no text ever comes":
+
+```markdown
+| "no handler for given file type `pulseaudio'"     | sox lacks the driver: on Debian and Ubuntu install `libsox-fmt-pulse` (or `libsox-fmt-alsa`), or set `earwig-audio-driver` to one sox has                                     |
+```
+
+**Files.**
+
+- "`earwig-platform.el`: what differs between macOS, Linux and Windows" (now "from one operating
+  system to another").
+- "`docs/roadmap/`: what's planned, Linux testing and Windows among it" (now "what's planned").
+
+**Development.** At the end of the paragraph before the test command: "The Linux code is tested on
+macOS too, with `system-type` bound and the programs' output given:"
 
 ## Open questions
 
