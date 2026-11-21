@@ -15,3 +15,9 @@ describe it instead.
 | Windows support: fill in and test the Windows branches of earwig-platform.el (waveaudio recording, stopping without SIGINT, microphones, key repeat) | designed, deferred until there's a Windows machine to test on | [windows.md](windows.md) |
 
 Windows comes after Linux: its test plan would follow linux-testing.md.
+
+## Voice commands
+
+| Item | Status | Document |
+|------|--------|----------|
+| Define all voice commands, Earwig's and the user's, as a phony.el grammar in Earwig's own English words, with commands taken from cursorfree.el (move, swap, change, wrap…), heading and section targets, and command boundaries found without "and then" | designed, not built; to be tried first, with workarounds for what phony.el lacks | [phony-grammar.md](phony-grammar.md) |
