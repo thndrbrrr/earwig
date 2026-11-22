@@ -739,6 +739,289 @@ Can’t parse number \"lots\": \"lots\" is no number")))))
     (with-temp-buffer
       (should-error (earwig-cmd-go-back) :type 'user-error))))
 
+;;;; Targets and commands of phase 2
+
+(defconst earwig-test-org "* Plans
+SCHEDULED: <2026-11-24 Tue>
+Some plans here.
+** Budget review
+Numbers are in.
+*** Open questions
+Who pays?
+** Timeline
+It is late|.
+* Other
+- milk
+- eggs
+  - brown
+- bread
+"
+  "An Org buffer for the tests of headings, sections and items.")
+
+(defun earwig-test-region (text mode command)
+  "Return the region in TEXT in MODE after the voice COMMAND."
+  (let (region)
+    (earwig-test-buffer text mode
+      (transient-mark-mode 1)
+      (let ((inhibit-message t))
+        (earwig-run-command command))
+      (setq region (and (use-region-p) (buffer-substring (region-beginning) (region-end)))))
+    region))
+
+(ert-deftest earwig-test-heading-targets ()
+  (should (equal (earwig-test-region earwig-test-org #'org-mode "select this heading") "Timeline"))
+  (should (equal (earwig-test-region earwig-test-org #'org-mode "select the previous heading")
+                 "Open questions"))
+  (should (equal (earwig-test-region earwig-test-org #'org-mode "select the next heading") "Other"))
+  (should (equal (earwig-test-region earwig-test-org #'org-mode "select the heading above") "Plans"))
+  (should (equal (earwig-test-region earwig-test-org #'org-mode "select the previous section")
+                 "** Budget review\nNumbers are in.\n*** Open questions\nWho pays?"))
+  ;; The body is without the planning line and the subheadings
+  (should (equal (earwig-test-region earwig-test-org #'org-mode
+                                     "select the body of the heading with plans")
+                 "Some plans here."))
+  (should (equal (earwig-test-region earwig-test-org #'org-mode
+                                     "select the subheadings of the heading with budget")
+                 "*** Open questions\nWho pays?"))
+  (should (equal (earwig-test-command earwig-test-org #'org-mode
+                                      "delete everything under the heading with budget")
+                 (replace-regexp-in-string "|" "" (string-replace "Numbers are in.
+*** Open questions
+Who pays?
+" "" earwig-test-org))))
+  (should (equal (earwig-test-region earwig-test-org #'org-mode "select the item with eggs")
+                 "- eggs\n  - brown"))
+  ;; The words of "the heading with" must be in a title
+  (should (equal (earwig-test-region earwig-test-org #'org-mode "select the section with pays")
+                 nil))
+  ;; "next heading" is a target, no longer a command of its own
+  (should-not (earwig-find-command "next heading"))
+  (should-not (earwig-find-command "next item")))
+
+(ert-deftest earwig-test-word-targets ()
+  (let ((sentence-end-double-space nil))
+    (should (equal (earwig-test-command "a meow b meow c|" #'text-mode "uppercase every meow")
+                   "a MEOW b MEOW c"))
+    (should (equal (earwig-test-command "One meow. Two meow. Three meow.|" #'text-mode
+                                        "uppercase every meow in the last two sentences")
+                   "One meow. Two MEOW. Three MEOW."))
+    (should (equal (earwig-test-command "one two three four two|" #'text-mode
+                                        "capitalize each of one three and four")
+                   "One two Three Four two"))
+    ;; "A and B" is one target when it's there as words, two otherwise
+    (should (equal (earwig-test-command "Salt and pepper. Salt. Pepper.|" #'text-mode
+                                        "delete salt and pepper")
+                   ". Salt. Pepper."))
+    (should (equal (earwig-test-command "We need salt. Also pepper.|" #'text-mode
+                                        "delete salt and pepper")
+                   "We need. Also."))
+    (should (equal (earwig-test-command "Salt and pepper. Salt. Pepper.|" #'text-mode
+                                        "delete both salt and pepper")
+                   "Salt and pepper..."))
+    ;; The next and previous, from point
+    (should (equal (earwig-test-buffer "two one |two three two" #'text-mode
+                     (let ((inhibit-message t))
+                       (earwig-run-command "go before the previous two")
+                       (should (= (point) 1))
+                       (earwig-run-command "go after the next two")
+                       (should (= (point) 12))
+                       (earwig-run-command "go to the end of this line")
+                       (should (= (point) (point-max)))))
+                   "two one two three two"))
+    (should (equal (earwig-test-region "First one. The sentence with however here. Last.|"
+                                       #'text-mode "select the sentence with however")
+                   "The sentence with however here."))))
+
+(ert-deftest earwig-test-move ()
+  (let ((sentence-end-double-space nil)
+        (earwig-flash nil))
+    ;; A section takes the level of where it goes
+    (should (equal (earwig-test-command "* A\n** B|\n* C\n" #'org-mode
+                                        "move this section after the section with c")
+                   "* A\n* C\n* B\n"))
+    (should (equal (earwig-test-command "* A\n** B|\nb\n* C\n" #'org-mode
+                                        "move this section under the heading with c")
+                   "* A\n* C\n** B\nb\n"))
+    (should (equal (earwig-test-command earwig-test-org #'org-mode
+                                        "move this section before the section with budget")
+                   "* Plans
+SCHEDULED: <2026-11-24 Tue>
+Some plans here.
+** Timeline
+It is late.
+** Budget review
+Numbers are in.
+*** Open questions
+Who pays?
+* Other
+- milk
+- eggs
+  - brown
+- bread
+"))
+    ;; Items as lines, indented where they go
+    (should (equal (earwig-test-command "- milk\n- eggs\n  - brown\n- bread|\n" #'org-mode
+                                        "move the item with milk after the item with bread")
+                   "- eggs\n  - brown\n- bread\n- milk\n"))
+    (should (equal (earwig-test-command "- milk\n- eggs\n- bread|\n" #'org-mode
+                                        "move the item with bread under the item with milk")
+                   "- milk\n  - bread\n- eggs\n"))
+    ;; Paragraphs as paragraphs, other text spaced as dictation is
+    (should (equal (earwig-test-command "First.\n\nSecond here.\n\nThird|." #'text-mode
+                                        "move this paragraph before the paragraph with second")
+                   "First.\n\nThird.\n\nSecond here."))
+    (should (equal (earwig-test-command "one two three four|" #'text-mode "move two after four")
+                   "one three four two"))
+    (should (equal (earwig-test-command "one two three four|" #'text-mode
+                                        "copy two to the start of this line")
+                   "two one two three four"))
+    ;; Into an empty body, on a line of its own
+    (should (equal (earwig-test-command "* A\nSome text.\n* B\n* C|\n" #'org-mode
+                                        "copy some text to the end of the body of the heading with b")
+                   "* A\nSome text.\n* B\nSome text\n* C\n"))
+    ;; "that" is what went in last
+    (should (equal (earwig-test-command "- call mum\n- buy milk|\n" #'org-mode
+                                        "duplicate the item with call mum and then replace mum with dad in that")
+                   "- call mum\n- call dad\n- buy milk\n"))
+    (should (equal (earwig-test-command "one two three four|" #'text-mode
+                                        "swap two with four uppercase that")
+                   "one four three TWO"))
+    (should (equal (earwig-test-command "* A\n** B\nb\n** C\nc|\n" #'org-mode
+                                        "swap this section with the section with b")
+                   "* A\n** C\nc\n** B\nb\n"))
+    ;; One undo step
+    (should (equal (earwig-test-buffer "one two three four|" #'text-mode
+                     (buffer-enable-undo)
+                     (let ((inhibit-message t))
+                       (earwig-run-command "move two after four"))
+                     (undo-boundary)
+                     (undo))
+                   "one two three four"))))
+
+(ert-deftest earwig-test-markdown-sections ()
+  "Markdown's # headings, not those in code blocks, and blank lines between sections."
+  (skip-unless (require 'markdown-mode nil t))
+  (let ((earwig-flash nil)
+        (text "# Plans\n\n## Budget\n\nNumbers.\n\n```sh\n# not a heading\n```\n\n## Timeline\n\nLate|.\n"))
+    (should (equal (earwig-test-command text #'markdown-mode
+                                        "move this section before the section with budget")
+                   "# Plans\n\n## Timeline\n\nLate.\n\n## Budget\n\nNumbers.\n\n```sh\n# not a heading\n```\n"))
+    (should (equal (earwig-test-region text #'markdown-mode "select the previous heading")
+                   "Budget"))))
+
+(ert-deftest earwig-test-rewrite ()
+  (should (equal (earwig-test-buffer "A big dog|" #'text-mode
+                   (let ((inhibit-message t))
+                     (earwig-run-command "rewrite big"))
+                   (should (= (point) 3)))
+                 "A dog"))
+  ;; A list item keeps its bullet
+  (should (equal (earwig-test-command "- milk\n- eggs|\n" #'org-mode "rewrite this item")
+                 "- milk\n- \n"))
+  ;; A heading keeps its stars and space, and the dictation is its title
+  (should (equal (earwig-test-buffer "* Notes\n* Old title|\n" #'org-mode
+                   (let ((inhibit-message t))
+                     (earwig-run-command "rewrite this heading"))
+                   (earwig-insert-dictation (list "lessons learned.") (current-buffer) (point)))
+                 "* Notes\n* Lessons learned\n")))
+
+(ert-deftest earwig-test-wrap ()
+  (let ((earwig-flash nil))
+    (should (equal (earwig-test-command "The budget is final.|" #'text-mode
+                                        "wrap budget in quotes")
+                   "The \"budget\" is final."))
+    (should (equal (earwig-test-command "He said “hi”. The budget|" #'text-mode
+                                        "put quotes around budget")
+                   "He said “hi”. The “budget”"))
+    (should (equal (earwig-test-command "Some words here and there|" #'text-mode
+                                        "wrap words here in dashes")
+                   "Some — words here — and there"))
+    (should (equal (earwig-test-command "A dog the big one barks.|" #'text-mode
+                                        "wrap the big one in commas")
+                   "A dog, the big one, barks."))
+    (should (equal (earwig-test-command "f(a, (b c), d)|" #'text-mode "unwrap b")
+                   "f(a, b c, d)"))
+    (should (equal (earwig-test-command "Say 'go' but don't.|" #'text-mode "unwrap go")
+                   "Say go but don't."))
+    (should (equal (earwig-test-command "A dog, the big one, barks.|" #'text-mode
+                                        "replace the commas around the big one with dashes")
+                   "A dog — the big one — barks."))
+    (should (equal (earwig-test-command "It is (as noted) final.|" #'text-mode
+                                        "change the parentheses around as noted to commas")
+                   "It is, as noted, final."))
+    (should (equal (earwig-test-command "An aside at the end, like this.|" #'text-mode
+                                        "remove the commas around like this")
+                   "An aside at the end like this."))))
+
+(ert-deftest earwig-test-new-at ()
+  (should (equal (earwig-test-command earwig-test-org #'org-mode
+                                      "new heading after the heading with budget")
+                 (string-replace "** Timeline" "** \n** Timeline"
+                                 (string-replace "|" "" earwig-test-org))))
+  (should (equal (earwig-test-command "* A\n* B|\n" #'org-mode "new heading before the heading with a")
+                 "* \n* A\n* B\n"))
+  (should (equal (earwig-test-command "- milk\n- eggs|\n" #'org-mode
+                                      "new item before the item with eggs")
+                 "- milk\n- \n- eggs\n"))
+  (should (equal (earwig-test-command "- milk\n- eggs|\n" #'org-mode
+                                      "add an item under the item with milk")
+                 "- milk\n  - \n- eggs\n"))
+  ;; Dictation fills it
+  (should (equal (earwig-test-buffer "* A\n* B|\n" #'org-mode
+                   (let ((inhibit-message t))
+                     (earwig-run-command "new heading before the heading with b"))
+                   (earwig-insert-dictation (list "next steps.") (current-buffer) (point)))
+                 "* A\n* Next steps\n* B\n"))
+  ;; Without that heading, the words are the new heading's title
+  (should (equal (earwig-test-command "* A|\n" #'org-mode "new heading after the heading with zebra")
+                 "* A\n* After the heading with zebra\n"))
+  (should (equal (earwig-test-command "First.\n\nSecond however here.|" #'text-mode
+                                      "new paragraph before however")
+                 "First.\n\nSecond\n\n\n\nhowever here.")))
+
+(ert-deftest earwig-test-go-into-focus-where ()
+  (should (equal (earwig-test-buffer earwig-test-org #'org-mode
+                   (let ((inhibit-message t))
+                     (earwig-run-command "go into the heading with budget"))
+                   (should (looking-back "Numbers are in\\." nil)))
+                 (string-replace "|" "" earwig-test-org)))
+  ;; An empty body gets a line of its own, after the planning line
+  (should (equal (earwig-test-buffer "* A\nSCHEDULED: <2026-11-24 Tue>\n* B|\n" #'org-mode
+                   (let ((inhibit-message t))
+                     (earwig-run-command "go into the heading with a"))
+                   (insert "Text"))
+                 "* A\nSCHEDULED: <2026-11-24 Tue>\nText\n* B\n"))
+  (should (equal (earwig-test-buffer earwig-test-org #'org-mode
+                   (let ((inhibit-message t))
+                     (earwig-run-command "focus on the section with budget")
+                     (should (equal (buffer-string)
+                                    "** Budget review\nNumbers are in.\n*** Open questions\nWho pays?\n"))
+                     (earwig-run-command "replace numbers with digits everywhere and then show everything")))
+                 (string-replace "Numbers" "Digits" (string-replace "|" "" earwig-test-org))))
+  (let ((earwig-flash t))
+    (earwig-test-buffer "a meow b meow c|" #'text-mode
+      (let ((inhibit-message t))
+        (earwig-run-command "where is every meow"))
+      (should (= (length (cl-remove-if-not (lambda (o) (eq (overlay-get o 'face) 'earwig-flash))
+                                           (overlays-in (point-min) (point-max))))
+                 2)))))
+
+(ert-deftest earwig-test-links ()
+  (let (opened)
+    (cl-letf (((symbol-function 'browse-url) (lambda (url &rest _) (setq opened url))))
+      (earwig-test-buffer "See https://example.com/a and https://example.org/roadmap now.|"
+          #'text-mode
+        (let ((inhibit-message t))
+          (earwig-run-command "open the link with roadmap")))
+      (should (equal opened "https://example.org/roadmap"))
+      (earwig-test-buffer "Plain. See https://example.com/a now.|" #'text-mode
+        (let ((inhibit-message t))
+          (earwig-run-command "open the link in this line")))
+      (should (equal opened "https://example.com/a")))
+    (should (equal (earwig-test-region "Budget: see [[https://x.org][the roadmap]] now.|" #'org-mode
+                                       "select the link with roadmap")
+                   "[[https://x.org][the roadmap]]"))))
+
 ;;;; Headings, lists and joins
 
 (ert-deftest earwig-test-structure-parts ()

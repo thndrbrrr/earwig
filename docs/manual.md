@@ -18,6 +18,7 @@ The [README](../README.md) covers installing Earwig, setting it up and everyday 
   - [Headings and lists (Org and Markdown)](#headings-and-lists-org-and-markdown)
   - [Joining sentences](#joining-sentences)
   - [Replacing](#replacing)
+  - [Moving, copying and wrapping](#moving-copying-and-wrapping)
   - [Moving and other editing](#moving-and-other-editing)
   - [Emacs and Org commands](#emacs-and-org-commands)
 - [Dictation](#dictation)
@@ -184,20 +185,44 @@ Every verb works on every target: "select last two words", "delete that", "capit
 | lowercase  | lower case, downcase         |                                            |
 | title case |                              | title case, small words stay lower case    |
 
-| Target                                                | Example                                                                  | Means                                                                                  |
-|-------------------------------------------------------|--------------------------------------------------------------------------|----------------------------------------------------------------------------------------|
-| nothing, region, selection                            | "uppercase", "cut the selection"                                         | the region or evil's visual selection; "select" alone needs one                        |
-| that, this, it                                        | "delete that"                                                            | the region, or else the last dictation in this buffer                                  |
-| [this, the, current] UNIT                             | "select this sentence", "title case line"                                | the unit around point                                                                  |
-| last, previous, next [N] UNITs                        | "delete last three words", "copy next line"                              | before or after point; N as a word or digits                                           |
-| the [whole] buffer or file, everything, all           | "copy everything"                                                        | the whole buffer                                                                       |
-| A through B, A until B, from A to / until / through B | "cut because through Friday", "copy from however until shown"            | from the nearest A that has a B after it to the end of the first such B                |
-| any other words                                       | "capitalize emacs lisp"                                                  | the nearest place those words appear                                                   |
-| WORDS in TARGET                                       | "delete very in this paragraph", "select meow in the last two sentences" | the nearest WORDS (or A through B) inside TARGET, one of the parts of the buffer above |
+| Target                                                  | Example                                                                    | Means                                                                                                    |
+|---------------------------------------------------------|----------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------|
+| nothing, region, selection                              | "uppercase", "cut the selection"                                           | the region or evil's visual selection; "select" alone needs one                                          |
+| that, this, it                                          | "delete that"                                                              | the region, or else the text that went in last: your last dictation, or what a command put in after it  |
+| [this, the, current] UNIT                               | "select this sentence", "title case this heading"                          | the unit around point                                                                                    |
+| last, previous, next [N] UNITs                          | "delete last three words", "copy next line", "select the previous heading" | before or after point; N as a word or digits                                                             |
+| the UNIT with / containing WORDS                        | "select the paragraph with budget", "delete the item containing milk"      | the nearest UNIT with those words in it; for a heading or section, in its title                          |
+| the [whole] buffer or file, everything, all             | "copy everything"                                                          | the whole buffer                                                                                         |
+| A through B, A until B, from A to / until / through B   | "cut because through Friday", "copy from however until shown"              | from the nearest A that has a B after it to the end of the first such B                                  |
+| any other words                                         | "capitalize emacs lisp"                                                    | the nearest place those words appear                                                                     |
+| the next / following / previous / preceding WORDS       | "select the next budget"                                                   | the nearest after or before point                                                                        |
+| WORDS in TARGET                                         | "delete very in this paragraph", "select meow in the last two sentences"   | the nearest WORDS (or A through B, or the next WORDS) inside TARGET, one of the parts of the buffer above |
+| every / each WORDS [in TARGET]                          | "format bold every deadline in this section"                               | all of them                                                                                              |
+| the start / beginning / end of TARGET                   | "go to the end of the paragraph with budget"                               | the place right before or after it                                                                       |
+| A and B                                                 | "delete very and really"                                                   | both, where "A and B" isn't in the buffer as words: "salt and pepper" stays one target if it's there     |
+| both A and B, each of A B and C                         | "capitalize each of Monday Tuesday and Friday"                             | several, even where "A and B" is in the buffer                                                           |
 
-- **UNIT** is word, sentence, paragraph or line. A deleted or cut line takes its newline with it. "last word" leaves the punctuation after the word alone. In evil's normal state the character under the cursor counts as before point.
-- **Words are found** ignoring case and the punctuation between them, so "end of file" also finds "end-of-file". Markup doesn't get in the way: "heading" is found in `_Some underlined heading_`, and "last word" there is `heading` without the underscore. An underscore between letters joins them, so `foo_bar` is one word. The nearest is looked for in the window first, then in the whole buffer: one around point wins, then the closest before point, then the closest after.
+In Org and Markdown, headings and lists are targets too:
+
+| Target                                                  | Example                                             | Means                                                                                                        |
+|---------------------------------------------------------|-----------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
+| this heading, this headline                             | "title case this heading"                           | its title, without stars, TODO keyword, priority or tags                                                     |
+| this section, this subtree                              | "move this section after the section with timeline" | the heading with everything under it                                                                         |
+| the body of HEADING, the text under HEADING             | "select the body of this heading"                   | its own text: after the heading line and Org's planning line (SCHEDULED, DEADLINE) and drawers, up to its first subheading |
+| everything under HEADING                                | "delete everything under the heading with draft"    | its own text and its subheadings                                                                             |
+| the subheadings [of HEADING]                            | "copy the subheadings of the heading with plans"    | its subheadings, with theirs                                                                                 |
+| the heading above, the parent heading                   | "uppercase the heading above"                       | one level up                                                                                                 |
+| the previous / next heading, last / next N headings     | "select the next heading"                           | by position, at any level                                                                                    |
+| the previous / next section, last / next N sections     | "swap this section with the next section"           | at the level of the one you're in                                                                            |
+| this item, this bullet, the item with WORDS             | "move the item with milk after the item with bread" | a list item with its sub-items; in any buffer                                                                |
+| this link, the link with WORDS, the next link           | "open the link with roadmap"                        | an Org link, a Markdown link, or a URL; in any buffer                                                        |
+
+HEADING is any of these that names a heading: "this heading", "the section with budget", "the heading above", "the next heading".
+
+- **UNIT** is word, sentence, paragraph, line, heading (or headline), section (or subtree), item (or bullet) or link. A deleted or cut line, item or section takes its newline with it. "last word" leaves the punctuation after the word alone. In evil's normal state the character under the cursor counts as before point.
+- **Words are found** ignoring case and the punctuation between them, so "end of file" also finds "end-of-file". Markup doesn't get in the way: "heading" is found in `_Some underlined heading_`, and "last word" there is `heading` without the underscore. An underscore or apostrophe between letters joins them, so `foo_bar` and `don't` are one word each, but `'go'` is the word `go` in quotes. The nearest is looked for in the window first, then in the whole buffer: one around point wins, then the closest before point, then the closest after.
 - **"in"** only scopes when what follows names a part of the buffer; otherwise it's one of the words: "select log in screen".
+- **Several places,** as "every" and "and" give, are acted on together, in one undo step; cut or copied, they go into the kill ring together. "select" takes only one.
 - **"next one", "previous one"** (or "next match") move a word target on to the next or previous place it appears, after "select WORDS" or "go before/after WORDS".
 
 ### Formatting
@@ -228,7 +253,23 @@ Every verb works on every target: "select last two words", "delete that", "capit
 | new sub item [TEXT]         | an item one level deeper                                                                                                                        |
 | new checkbox [TEXT]         | an item with `[ ] `                                                                                                                             |
 
-As commands, "next heading" and "next item" work too (these will go once "the next heading" can be a target, see the [roadmap](roadmap/phony-grammar.md)). Numbered lists go on numbering, and an item gets a checkbox when the one before has one. TEXT goes in with a capital: "new heading next steps". In Org these use Org's own commands, so blank lines and numbering follow Org's settings; in Markdown they work on `#` headings outside code blocks and on `-`, `+`, `*` and numbered lists.
+Numbered lists go on numbering, and an item gets a checkbox when the one before has one. TEXT goes in with a capital: "new heading next steps". In Org these use Org's own commands, so blank lines and numbering follow Org's settings; in Markdown they work on `#` headings outside code blocks and on `-`, `+`, `*` and numbered lists.
+
+Elsewhere, and in any buffer for paragraphs, as commands:
+
+| Say                                                                 | Does                                                                                                                                   |
+|---------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
+| new heading, item, paragraph before / after / under DEST            | "new heading after the heading with budget", "new item before the item with eggs", "new paragraph before however"; then dictate it      |
+| add a heading, add an item, add a paragraph … (the same)            | "add an item under the item with eggs": a sub-item                                                                                     |
+| new subheading under DEST                                           | a subheading, as the last one                                                                                                          |
+| go into DEST, add to DEST                                           | to the end of a heading's own text, before its first subheading, to add to it: "okay, go into the heading with budget", dictate, "go back" |
+
+- DEST is one target, as in the tables above, not "every" or "and".
+- A heading or item goes where "new heading" or "new item" would put one if you were at DEST, or right before it. "under" makes a subheading or sub-item, the last.
+- "new heading after the heading with budget" makes the heading there when the buffer has a heading with "budget"; otherwise it's a new heading titled "After the heading with budget", as before.
+- A new paragraph next to a paragraph, section or list item goes beside it; next to other words it splits their paragraph, with the new, empty one between. "under" a heading, it's at the end of the heading's own text.
+- Going into a heading with no text of its own opens a line for it, after Org's planning line and drawers.
+- The bare commands "next heading", "next item" and "next bullet" are gone: "the next heading" is a target, as in "select the next heading". Say "new heading" or "new item".
 
 **In dictation** the same phrases work where they start a sentence, so pause before them: "That's all for now. New heading. Next steps. First we plan it. New item, buy milk. New item, call mum." gives
 
@@ -268,19 +309,39 @@ When a pause split a sentence in two, mend it without leaving dictation: say "ok
 
 B takes A's capital ("Monday" → "Tuesday" at a sentence start), but the capital of "I", an acronym or a name only at a sentence start: "replace I with we" gives "we" mid-sentence. TARGET is a part of the buffer from the table above, not words. A and B may themselves contain "with".
 
+### Moving, copying and wrapping
+
+| Say                                                                     | Does                                                                                                                       |
+|-------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------|
+| move TARGET before / after / under DEST, move TARGET to the start / end of DEST | "move last sentence after budget", "move this section under the heading with plans", "move the item with sharks after the item with Igor" |
+| copy TARGET before / after / under DEST, or to the start / end of DEST  | the same, leaving it where it was; "copy TARGET" alone copies to the kill ring, as before                                  |
+| swap A with B                                                           | "swap Monday with Tuesday", "swap this section with the next section"                                                      |
+| duplicate TARGET                                                        | a copy right after it: "duplicate this line"                                                                               |
+| rewrite TARGET                                                          | deletes it and leaves the cursor there, to dictate in its place: "okay, rewrite last sentence", keep talking, "go back"     |
+| put PAIR around TARGET, wrap TARGET in PAIR                             | "wrap last three words in quotes", "put brackets around that"                                                              |
+| remove the PAIR around TARGET, unwrap TARGET                            | "unwrap that" takes off the nearest quotes or brackets around it                                                           |
+| replace the PAIR around TARGET with PAIR, change the PAIR around TARGET to PAIR | "replace the parentheses around as noted with dashes"                                                              |
+
+- **What moves goes as what it is.** A section goes with its subheadings, their levels set for where it goes: beside a heading "before" or "after" it, as its last subheading "under" it. Whole lines and list items go as lines, indented like the item they go next to, or as its last sub-item "under" it; a numbered Org list is renumbered. A paragraph goes as a paragraph, and other text is spaced from the words around it, as dictation is.
+- **DEST** is one target, not "every" or "and". "under" can also be said "as a subheading of" or "as a sub-item of".
+- **"that"** is then what went in, so a chain can go on with it: "duplicate the item with call mum and then replace mum with dad in that", "move the sentence with however to the end of this paragraph and then replace however with still in that". What went in flashes; `(setopt earwig-flash nil)` turns that off.
+- **Swapping sections** swaps their levels too. "swap A with B" may have "with" in A or B; the buffer settles which "with" splits them, as for "replace".
+- **PAIR** is quotes, single quotes, parentheses (or brackets), square brackets, dashes or commas. Quotes are typographic (“ ”) where the buffer already has some. Dashes and commas take the place of the spaces around the text, and none goes at the end of a sentence: "wrap as noted earlier in commas" gives "x, as noted earlier, y". The dash is `earwig-dash`, a spaced em dash by default. "unwrap" takes off only quotes and brackets; name dashes and commas to remove them.
+- Each is one undo step. "rewrite" keeps a list item's bullet or a heading's stars; "go back" returns to where you were.
+
 ### Moving and other editing
 
-| Say                                                                    | Does                                                                                             |
-|------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
-| go before WORDS, go after WORDS [in TARGET]                            | moves to the nearest place those words appear                                                    |
-| go to [the] start of / beginning of / end of line, sentence, paragraph |                                                                                                  |
-| go back                                                                | back to where point was before the last "go" (or "next one" after "go"); again, to where it went |
-| paste                                                                  | the buffer's own paste, spaced from the words around it as dictation is; see below              |
-| new line, new paragraph                                                |                                                                                                  |
-| scratch that                                                           | deletes the last dictation                                                                       |
-| undo, redo                                                             |                                                                                                  |
+| Say                                         | Does                                                                                             |
+|---------------------------------------------|--------------------------------------------------------------------------------------------------|
+| go before TARGET, go after TARGET           | "go after budget", "go before budget in this paragraph", "go after this section"                 |
+| go to the start / beginning / end of TARGET | "go to the end of the line", "go to the start of the paragraph with budget"                      |
+| go back                                     | back to where point was before the last "go" (or "next one" after "go"); again, to where it went |
+| paste                                       | the buffer's own paste, spaced from the words around it as dictation is; see below              |
+| new line, new paragraph                     |                                                                                                  |
+| scratch that                                | deletes the last dictation                                                                       |
+| undo, redo                                  |                                                                                                  |
 
-- **Moving text:** "cut last sentence and then go before mercy and then paste" puts the sentence there with a space on either side, as dictation would. Lines cut or copied whole ("cut this line", "copy last two lines") go in as lines: before the line point is on, or after it when point is at the end of its text. "go after sharks and then cut this line and then go before Igor and then paste" swaps two list items.
+- **Cut and paste:** "cut last sentence and then go before mercy and then paste" puts the sentence there with a space on either side, as dictation would; "move last sentence before mercy" does the same in one. Lines cut or copied whole ("cut this line", "copy last two lines") go in as lines: before the line point is on, or after it when point is at the end of its text.
 - **In evil,** paste goes after the cursor in normal state, but where "go before" or "go after" put it right after one of those. A visual selection is replaced. Lines cut or copied whole are line-wise for evil's own `p` and `P` too. Terminals get the paste as typed input, unspaced.
 
 ### Emacs and Org commands
@@ -302,6 +363,10 @@ B takes A's capital ("Monday" → "Tuesday" at a sentence start), but the capita
 | mark [it] done, toggle todo                                   | Org: the TODO state of the entry at point             |
 | schedule [it] [for] today \| tomorrow \| next week \| on DAY  | Org: schedules the entry at point                     |
 | open agenda                                                   | Org's agenda dispatcher                               |
+| open the link with WORDS, open that link, open the link in TARGET | follows an Org link, a Markdown link or a URL     |
+| focus on TARGET, narrow to TARGET                             | shows only it: "focus on this section"                |
+| show everything, widen                                        | shows the whole buffer again                          |
+| where is TARGET, show me TARGET                               | flashes it, scrolling there if it's out of sight; "show me everything" flashes the whole buffer |
 
 "search", "switch to buffer" and "go to heading" use consult when it's installed; without it, isearch, `switch-to-buffer` and `imenu`.
 
@@ -422,7 +487,8 @@ Rules of Earwig's to use in your patterns:
 - `earwig-words` – Words to find in the buffer. Earwig prefers a reading where they're there.
 - `earwig-number` – A number, in digits or words, see `earwig-parse-number` below. Its value is the number; a reading where it isn't one is only chosen to say so.
 - `earwig-part` – A part of the buffer, named as the editing commands' targets are: "last two sentences", "this paragraph", "that", "the whole buffer". `earwig-part-range` makes it `(BEG . END)`.
-- `earwig-target` – What an editing verb acts on: a part, or words to find, "A through B", "WORDS in PART". `earwig-target-range` makes it `(BEG . END)`, and signals a `user-error` if it isn't there.
+- `earwig-target` – What an editing verb acts on: a part, or words to find, "A through B", "WORDS in PART", "every WORDS", "A and B", "the end of TARGET". `earwig-target-ranges` makes it a list of `(BEG . END)`, and signals a `user-error` if it isn't there; `earwig-target-range` gives the one `(BEG . END)`, and signals one if it's several places too.
+- `earwig-destination` – Where to put something: "before TARGET", "after TARGET", "under TARGET", "to the start of TARGET", "to the end of TARGET". Its value is `(KIND TARGET)`, KIND `before`, `after`, `under`, `start` or `end`.
 - `earwig-when` – A spoken date ("today", "tomorrow", "next week", "next month", "on Friday"); its value is what was said, which `earwig-spoken-time` makes a time, as "schedule" does. They're in `earwig-org.el`, as `earwig-spoken-time` uses Org's date reading.
 
 Helpers:
@@ -431,7 +497,7 @@ Helpers:
 - `earwig-downcase-first-word` undoes the capital Orukeet gives the first word.
 - `earwig-parse-number` returns the number a spoken text says, in digits or words: "42", "forty-two", "one hundred and five", "a thousand", "1,000", "2 million". Numbers said one after another make one of all their digits, so "one one" is 11, "nineteen eighty-four" 1984 and "five twenty" 520, and a decimal after "point" or "decimal" ("two point five", "2.5") gives a float. Anything else signals an error that says what it couldn't read, `Can't parse number "five hundred hundred": "hundred" after "hundred"`. With a second argument, a decimal fails too ("Not a whole number"); with a third, it returns nil instead of failing.
 - `earwig-raw-command` is the command as transcribed while it runs, with its punctuation, for passing on what was said.
-- `earwig-part-range` returns `(BEG . END)` of an `earwig-part`, or of a part named in words, as in `(earwig-part-range "last two sentences")`; nil for the selection. It returns nil for anything else, such as words to look for, and signals a `user-error` if the part isn't there.
+- `earwig-part-range` returns `(BEG . END)` of an `earwig-part`, or of a part named in words, as in `(earwig-part-range "last two sentences")` or `(earwig-part-range "the section with budget")`; nil for the selection. It returns nil for anything else, such as words to look for, and signals a `user-error` if the part isn't there.
 - `earwig-defcommand` is how Earwig defines its own commands: a `phony-defun` that also takes `:help` for "what can I say", `:check`, a form that says whether the command can act on the buffer as it is, to choose between readings, and `:go t` for commands "go back" returns from.
 
 ### Examples
@@ -488,7 +554,8 @@ Helpers:
 - `earwig-platform.el`: what differs from one operating system to another
 - `earwig-cleanup.el`: fillers, corrections, spoken punctuation, fitting text in
 - `earwig-grammar.el`: voice commands as a phony.el grammar: finding them in what's said and choosing between readings
-- `earwig-commands.el`, `earwig-edit.el`: spoken commands
+- `earwig-commands.el`, `earwig-edit.el`: spoken commands; `earwig-edit.el` also has the targets
+- `earwig-move.el`: moving, copying and wrapping text, making room for new headings and items, links, focus
 - `earwig-structure.el`: headings and lists, as commands and in dictation, and joining sentences
 - `earwig-org.el`: Org TODOs, scheduling and the agenda, as commands
 - `earwig-stream.el`: streaming dictation and provisional text

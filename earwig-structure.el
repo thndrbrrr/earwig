@@ -34,8 +34,7 @@
 ;;                               line ("new list", "start a list" too)
 ;;   new sub item [TEXT]         an item one level deeper
 ;;   new checkbox [TEXT]         an item with a "[ ] " checkbox
-;; As commands "next heading" and "next item | bullet" work too.  A
-;; numbered list goes on numbering, and an item gets a checkbox when the
+;; A numbered list goes on numbering, and an item gets a checkbox when the
 ;; one before has one.  TEXT goes there, with a capital: "new heading
 ;; introduction".  In Org these use Org's own commands, so the blank lines
 ;; and numbering follow Org's settings; in Markdown they work on # headings
@@ -97,12 +96,6 @@ See the commentary of earwig-structure.el."
     (sub-item "new sub item" "new subitem" "new sub-item" "new sub bullet")
     (checkbox "new checkbox" "new check box"))
   "Structure phrases, in dictation and as commands, as (ACTION PHRASE...).")
-
-(defconst earwig--structure-command-actions
-  (append earwig--structure-actions
-          '((heading "next heading")
-            (item "next item" "next bullet")))
-  "Structure phrases as commands: also ones too common in speech to dictate.")
 
 (defvar earwig--open-structure nil
   "(MARKER . KIND) of a heading or item just made, for the text that goes in.
@@ -468,7 +461,7 @@ With COMMA, by commas."
 
 (phony-define-dictionary earwig-structure-phrase
   "A phrase that makes a heading or list item; its value is the action."
-  (cl-loop for (action . phrases) in earwig--structure-command-actions
+  (cl-loop for (action . phrases) in earwig--structure-actions
            append (mapcar (lambda (phrase) (cons phrase action)) phrases)))
 
 (earwig-defcommand earwig-say-join ("join" (? "the") "last" (? (count earwig-number))
