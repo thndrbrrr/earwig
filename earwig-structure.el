@@ -70,6 +70,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'earwig-cleanup)
+(require 'earwig-grammar)
 
 (defvar earwig--last-dictation)
 (defvar evil-state)
@@ -82,7 +83,6 @@
 (declare-function org-at-item-checkbox-p "org-list" ())
 (declare-function markdown-code-block-at-pos "markdown-mode" (pos))
 (declare-function evil-insert-state "evil-states" (&optional arg))
-(declare-function earwig-parse-number "earwig-commands" (text &optional whole noerror))
 
 (defcustom earwig-dictation-structure t
   "Non-nil to act on heading and list item phrases in dictation.
@@ -451,36 +451,38 @@ blank line, a list item or a heading.  Point stays after the text."
 
 ;;;; Commands
 
-(defun earwig-cmd-structure (phrase text)
-  "Make the heading or item PHRASE says, with TEXT in it if given."
-  (let ((action (earwig--structure-action phrase earwig--structure-command-actions)))
-    (earwig-insert-dictation (if text (list action text) (list action))
-                               (current-buffer) (point))
-    (when (and (bound-and-true-p evil-local-mode) (memq evil-state '(normal visual)))
-      (evil-insert-state))))
+(defun earwig-cmd-structure (action text)
+  "Make the heading or item ACTION, with TEXT in it if given.
+ACTION is one of `earwig--structure-actions'."
+  (earwig-insert-dictation (if text (list action text) (list action))
+                           (current-buffer) (point))
+  (when (and (bound-and-true-p evil-local-mode) (memq evil-state '(normal visual)))
+    (evil-insert-state)))
 
 (defun earwig-cmd-join (count comma)
   "Join the last COUNT sentences, or the last one to the one before it.
 With COMMA, by commas."
   (undo-boundary)
   (barf-if-buffer-read-only)
-  (earwig-join-sentences
-   (if count
-       (max 1 (1- (earwig-parse-number count t)))
-     1)
-   (and comma t)))
+  (earwig-join-sentences (if count (max 1 (1- count)) 1) comma))
 
-(defconst earwig-structure-commands
-  `(("join \\(?:the \\)?last\\(?: \\(.+?\\)\\)? sentences?\\( with \\(?:a \\)?comma\\)?"
-     earwig-cmd-join
-     "join [the] last [N] sentence[s] [with comma]")
-    (,(concat "\\(" (regexp-opt (mapcan (lambda (entry) (copy-sequence (cdr entry)))
-                                         earwig--structure-command-actions))
-              "\\)\\(?: \\(.+\\)\\)?")
-     earwig-cmd-structure
-     "new heading | subheading | item | sub item | checkbox [TEXT]
-      (Org, Markdown; also in dictation, after a pause)"))
-  "Structure entries for `earwig-commands'.")
+(phony-define-dictionary earwig-structure-phrase
+  "A phrase that makes a heading or list item; its value is the action."
+  (cl-loop for (action . phrases) in earwig--structure-command-actions
+           append (mapcar (lambda (phrase) (cons phrase action)) phrases)))
+
+(earwig-defcommand earwig-say-join ("join" (? "the") "last" (? (count earwig-number))
+                                    (| "sentence" "sentences")
+                                    (? (comma (seq "with" (? "a") "comma"))))
+  "Join the last COUNT sentences, with commas if COMMA."
+  :help "join [the] last [N] sentence[s] [with comma]"
+  (earwig-cmd-join count (and comma t)))
+
+(earwig-defcommand earwig-say-structure ((action earwig-structure-phrase) (? (text earwig-text)))
+  "Make the heading or item ACTION says, with TEXT in it."
+  :help "new heading | subheading | item | sub item | checkbox [TEXT]
+      (Org, Markdown; also in dictation, after a pause)"
+  (earwig-cmd-structure action text))
 
 (provide 'earwig-structure)
 ;;; earwig-structure.el ends here

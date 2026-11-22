@@ -23,9 +23,11 @@
 
 ;;; Commentary:
 
-;; Run from the repository:
+;; Run from the repository, with phony.el and simulacrum on the load
+;; path (here installed by package.el):
 ;;
 ;;   emacs -Q --batch -L . \
+;;     --eval '(progn (package-initialize) (require (quote phony)))' \
 ;;     -l test/earwig-test.el -f ert-run-tests-batch-and-exit
 ;;
 ;; `earwig-test-stream' streams speech made by macOS's say through the
@@ -64,6 +66,18 @@ Learned ones are saved to a temporary `custom-file'."
          (progn ,@body)
        (delete-file custom-file))))
 
+(defmacro earwig-test-with-rules (names &rest body)
+  "Run BODY, then remove the Phony rules NAMES it defines."
+  (declare (indent 1))
+  `(unwind-protect
+       (progn ,@body)
+     (dolist (name ',names)
+       (phony-remove-rule name))))
+
+(defun earwig-test-target (spec)
+  "Return the `earwig-target' with SPEC."
+  (earwig--target-make spec))
+
 (defun earwig-test-command (text mode command)
   "Return TEXT in MODE after the voice COMMAND, point where TEXT has a |."
   (let ((inhibit-message t))
@@ -88,10 +102,13 @@ Learned ones are saved to a temporary `custom-file'."
     (let ((earwig-corrections-commands '(("kut" . "cut")))
           (earwig-wake-word-commands t)
           (earwig--mode 'dictate))
-      (should (equal (earwig-find-command "Kut that.") '(earwig-cmd-edit "Cut" "that")))
-      ;; Only when the command as said matches none
-      (let ((earwig-extra-commands '(("find note \\(.+\\)" ignore "find note NAME"))))
-        (should (equal (earwig-find-command "Find note Kut.") '(ignore "Kut"))))
+      (should (equal (earwig-find-command "Kut that.")
+                     `(earwig-say-edit cut ,(earwig-test-target '(that)))))
+      ;; Only when the command as said reads as none
+      (earwig-test-with-rules (earwig-test-find-note)
+        (phony-defun earwig-test-find-note ("find note" (name earwig-text))
+          (ignore name))
+        (should (equal (earwig-find-command "Find note Kut.") '(earwig-test-find-note "Kut"))))
       ;; Not in dictation, around a command or not
       (should (equal (earwig-apply-corrections "Kut said hi.") "Kut said hi."))
       (should (equal (earwig-test-buffer "|" #'fundamental-mode
@@ -235,30 +252,118 @@ Learned ones are saved to a temporary `custom-file'."
 
 (ert-deftest earwig-test-find-command ()
   (should (equal (earwig-find-command "Delete last two words.")
-                 '(earwig-cmd-edit "Delete" "last two words")))
-  (should (equal (earwig-find-command "go to line forty two")
-                 '(earwig-cmd-goto-line "forty two")))
-  (should (equal (earwig-find-command "What can I say?") '(earwig-cmd-help)))
-  (should-not (earwig-find-command "nonsense blah")))
+                 `(earwig-say-edit delete ,(earwig-test-target '(last 2 "word")))))
+  (should (equal (earwig-find-command "go to line forty two") '(earwig-say-goto-line 42)))
+  (should (equal (earwig-find-command "go to line 42") '(earwig-say-goto-line 42)))
+  (should (equal (earwig-find-command "What can I say?") '(earwig-say-help)))
+  (should-not (earwig-find-command "nonsense blah"))
+  ;; Two commands are no one command
+  (should-not (earwig-find-command "go to top paste")))
 
-(ert-deftest earwig-test-extra-commands ()
-  (let ((earwig-extra-commands '(("close\\(?: buffer\\)?" ignore "close"))))
-    (should (equal (earwig-find-command "Close buffer.") '(ignore)))))
+(ert-deftest earwig-test-user-commands ()
+  "Phony rules of your own are commands, and win over Earwig's for the same words."
+  (earwig-test-with-rules (earwig-test-close earwig-test-remind)
+    (phony-defun earwig-test-close ("close" (? "buffer"))
+      "Close it my way."
+      (ignore))
+    (should (equal (earwig-find-command "Close buffer.") '(earwig-test-close)))
+    ;; Earwig's rules for parts of commands, and its dates
+    (phony-defun earwig-test-remind ("remind me" (? (time earwig-when)) "to" (task earwig-text))
+      (list time task))
+    (should (equal (earwig-find-command "Remind me on Friday to call mum")
+                   '(earwig-test-remind "on friday" "call mum")))
+    (should (equal (earwig-find-commands "go to top remind me to call mum")
+                   '(("go to top" earwig-say-top)
+                     ("remind me to call mum" earwig-test-remind nil "call mum"))))
+    ;; "what can I say" shows them
+    (let ((inhibit-message t))
+      (save-window-excursion
+        (earwig-cmd-help)
+        (with-current-buffer "*Voice commands*"
+          (should (string-search "remind me [TIME] to TASK" (buffer-string)))
+          (should (string-search "Close it my way." (buffer-string))))))))
 
 (ert-deftest earwig-test-find-commands ()
   (should (equal (earwig-find-commands
                   "Format bold results, and then select the last sentence and then cut that. And then go to bottom, and then paste.")
-                 '(("Format bold results" earwig-cmd-format "bold" "results")
-                   ("select the last sentence" earwig-cmd-edit "select" "the last sentence")
-                   ("cut that" earwig-cmd-edit "cut" "that")
-                   ("go to bottom" end-of-buffer)
-                   ("paste." earwig-cmd-paste))))
+                 `(("Format bold results" earwig-say-format bold
+                    ,(earwig-test-target '(words "results")))
+                   ("select the last sentence" earwig-say-edit select
+                    ,(earwig-test-target '(last 1 "sentence")))
+                   ("cut that." earwig-say-edit cut ,(earwig-test-target '(that)))
+                   ("go to bottom" earwig-say-bottom)
+                   ("paste." earwig-say-paste))))
   ;; Split only where every part is a command
   (should (equal (earwig-find-commands "replace and then with so")
-                 '(("replace and then with so" earwig-cmd-replace "and then with so"))))
-  (should (equal (earwig-find-commands "Delete last two words.")
-                 '(("Delete last two words." earwig-cmd-edit "Delete" "last two words"))))
-  (should-not (earwig-find-commands "nonsense and then blah")))
+                 '(("replace and then with so" earwig-say-replace "and then" "so" nil nil))))
+  (should-not (earwig-find-commands "nonsense and then blah"))
+  ;; Without "and then" too
+  (should (equal (mapcar #'car (earwig-find-commands
+                                "select last sentence cut that go to bottom paste"))
+                 '("select last sentence" "cut that" "go to bottom" "paste")))
+  ;; Free text that can't be checked runs to the end, or to "and then"
+  (should (equal (earwig-find-commands "search budget go to top")
+                 '(("search budget go to top" earwig-say-search "budget go to top"))))
+  (should (equal (mapcar #'car (earwig-find-commands "search budget and then go to top"))
+                 '("search budget" "go to top")))
+  ;; Parts of the buffer before words, and a scope before more words
+  (should (equal (earwig-find-commands "replace one with two in this paragraph")
+                 `(("replace one with two in this paragraph" earwig-say-replace "one" "two"
+                    ,(earwig-test-target '(this "paragraph")) nil))))
+  (should (equal (earwig-find-commands "meow in the last two sentences")
+                 nil))
+  (should (equal (cdar (earwig-find-commands "copy meow in the last two sentences"))
+                 `(earwig-say-edit copy
+                                   ,(earwig-test-target
+                                     `(in ,(earwig-test-target '(words "meow"))
+                                          ,(earwig-test-target '(last 2 "sentence"))))))))
+
+(ert-deftest earwig-test-run-commands-by-buffer ()
+  "Which reading runs depends on what's in the buffer then."
+  ;; "budget cut that" isn't there: select budget, then cut that
+  (should (equal (earwig-test-command "The budget is final.|" #'text-mode
+                                      "select budget cut that")
+                 "The is final."))
+  ;; It is: one command, select it all
+  (should (equal (earwig-test-buffer "The budget cut that we made.|" #'text-mode
+                   (let ((inhibit-message t))
+                     (earwig-run-command "select budget cut that"))
+                   (should (equal (buffer-substring (region-beginning) (region-end))
+                                  "budget cut that")))
+                 "The budget cut that we made."))
+  ;; A pause splits them, even then
+  (should (equal (earwig-test-command "The budget cut that we made.|" #'text-mode
+                                      "Select budget. Cut that.")
+                 "The cut that we made."))
+  ;; "with" is split at the first place where there's something to replace
+  (should (equal (earwig-test-command "Tea with milk.|" #'text-mode
+                                      "replace tea with milk with coffee")
+                 "Milk with coffee with milk."))
+  (should (equal (earwig-test-command "Some tea.|" #'text-mode
+                                      "replace coffee with milk with tea")
+                 "Some tea."))
+  ;; Each command against the buffer as the one before left it
+  (should (equal (earwig-test-buffer "one two three|" #'text-mode
+                   (let ((inhibit-message t))
+                     (earwig-run-command "cut last word go to top paste select three"))
+                   ;; "three" is only there again once pasted
+                   (should (equal (buffer-substring (region-beginning) (region-end)) "three")))
+                 "three one two"))
+  ;; A number that doesn't parse says so
+  (with-temp-buffer
+    (let (said)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format &rest args) (setq said (apply #'format-message format args)))))
+        (earwig-run-command "go to line lots"))
+      (should (equal said "Voice command \"go to line lots\" failed: \
+Can’t parse number \"lots\": \"lots\" is no number")))))
+
+(ert-deftest earwig-test-chain-words-custom ()
+  (let ((earwig-chain-words '("then")))
+    (should (equal (mapcar #'car (earwig-find-commands "search budget then go to top"))
+                   '("search budget" "go to top"))))
+  (should (equal (mapcar #'car (earwig-find-commands "search budget then go to top"))
+                 '("search budget then go to top"))))
 
 (ert-deftest earwig-test-cancel-words ()
   (should (equal (earwig--strip-cancel-word "Select last sentence and then cut that, cancel.")
@@ -532,11 +637,13 @@ Learned ones are saved to a temporary `custom-file'."
   ;; Commands say why
   (with-temp-buffer
     (insert "a\nb\nc\n")
-    (should (equal (error-message-string
-                    (should-error (earwig-cmd-goto-line "lots") :type 'user-error))
-                   "Can’t parse number \"lots\": \"lots\" is no number"))
-    (should-error (earwig-cmd-goto-line "two point five") :type 'user-error)
-    (earwig-cmd-goto-line "two")
+    (let (said)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format &rest args) (setq said (apply #'format-message format args)))))
+        (earwig-run-command "go to line two point five"))
+      (should (string-search "Not a whole number" said)))
+    (let ((inhibit-message t))
+      (earwig-run-command "go to line two"))
     (should (= (line-number-at-pos) 2))))
 
 (ert-deftest earwig-test-wake-word ()

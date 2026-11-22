@@ -1,7 +1,12 @@
-# Command grammar on phony.el (design, not built)
+# Command grammar on phony.el (phase 1 built)
 
-Nothing in this document exists yet. Earwig matches its voice commands with regular expressions
-and resolves their targets with hand-written parsing. The idea is to define all commands,
+**Status:** phase 1 is built (earwig-grammar.el): all commands are Phony rules, found without "and
+then" and ranked over all readings, as below under "Built in phase 1". Phases 2 (the new targets
+and the commands taken from cursorfree) and 3 (hatty) are not built. The background below
+describes Earwig before phase 1.
+
+Earwig matched its voice commands with regular expressions
+and resolved their targets with hand-written parsing. The idea is to define all commands,
 Earwig's own and the user's, as a grammar in [phony.el](https://github.com/ErikPrantare/phony.el),
 in Earwig's own English words. Some commands are taken from
 [cursorfree.el](https://github.com/ErikPrantare/cursorfree.el), but without depending on it.
@@ -490,6 +495,39 @@ workarounds should be easy to find and replace later.
      cursorfree, reimplemented in Earwig.
   3. Hatty, most likely in a later phase (agreed), with the optional `earwig-cursorfree.el`.
 
+## Built in phase 1
+
+- **earwig-grammar.el** holds the workarounds, `earwig-defcommand` (a `phony-defun` with `:help`,
+  `:check` and `:go`), the shared rules (`earwig-number`, `earwig-words`, `earwig-text`, and the
+  open rules `earwig-part` and `earwig-target`), and finding, ranking and running commands. The
+  other files define their commands as rules next to the functions they call.
+- **Finding commands:** instead of enumerating every reading of the whole utterance, Earwig steps
+  Phony's parser from each word position and records which commands end where. Readings are
+  paths through that table, so spans (for `earwig-raw-command` and pauses) come for free and
+  readings aren't multiplied out. 35 words take under 0.05 s, uncompiled.
+- **Ranking, as built** (the order was open): readings that can't be evaluated (a number that
+  doesn't parse) only to say so; then the buffer check; greedy free text only before "and then";
+  fewest "and then" taken into commands; fewest pauses inside commands; fewest commands; the
+  user's rules before Earwig's; fewest free words; free words split as early as possible.
+  Without the buffer (preview, auto-stop, `earwig-find-commands`) fewest free words comes before
+  fewest commands, as words to find can't be ruled out then.
+- **Checks:** a command's arguments are evaluated before it runs, so `earwig-number` rules out
+  readings by signalling. Every `earwig-target` value is resolved against the buffer, and
+  `:check` covers the rest ("replace" has something to replace, "select" alone has a region).
+- **Help** stays hand-written for Earwig's commands (`:help`); the user's rules are listed from
+  their patterns, with their docstring's first line.
+- **Direct evaluation**, not the event path: the chain still stops at the first failure, and each
+  command is its own undo step. Keyboard macros of voice commands aren't there.
+- **Numbers:** `earwig-number` is Earwig's own rule over any words, checked by
+  `earwig-parse-number`, rather than a provider of Phony's `number` interface. A provider without
+  a module would take over `number` for all of the user's Phony rules.
+- **Breaking:** `earwig-extra-commands` is obsolete; Earwig warns once if it's set. The bare
+  commands "next heading", "next item" and "next bullet" stay until phase 2 makes "the next
+  heading" a target. `earwig-when-regexp` became the dictionary `earwig-when`, and
+  `earwig-part-range` takes an `earwig-part` value (or still a spoken string).
+- **Not done:** the better auto-stop from `phony-parser--wants` and dictionaries filled at
+  runtime for names (buffers, headings).
+
 ## Decide first
 
 1. Whether to keep Phony after the trial. Costs:
@@ -500,12 +538,9 @@ workarounds should be easy to find and replace later.
 ### Decide when building
 
 - "change every …", dictating into several places at once: left out, or done some way without
-  multiple-cursors.
-- The ranking order for automatic boundaries (suggested above).
-- Generated or hand-written help for "what can I say".
-- Event path (undo, macros) versus direct evaluation (stop on failure).
-- How Earwig's `number` provider accepts digits.
-- A migration note and the commit type (`feat!`) for the breaking changes:
-  - `earwig-extra-commands` becomes Phony rules
-  - the bare commands "next heading", "next item" and "next bullet" are dropped (wording #25,
-    #25a)
+  multiple-cursors (phase 2).
+- Dropping the bare commands "next heading", "next item" and "next bullet" (wording #25, #25a),
+  with phase 2.
+
+Settled in phase 1 (see "Built in phase 1"): the ranking order, help, direct evaluation, numbers,
+and the migration note (the manual's "Commands of your own").
