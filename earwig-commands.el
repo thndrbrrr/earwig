@@ -23,19 +23,22 @@
 
 ;;; Commentary:
 
-;; `earwig-commands' maps spoken phrases to Emacs commands.  earwig.el
-;; hands it the cleaned-up text of a command recording (Cmd-f, F8), or
-;; with `earwig-wake-word-commands', what's said after a wake word
-;; while dictating.  Commands of your own go in
-;; `earwig-extra-commands', which are tried first; `earwig-with-input',
-;; `earwig-downcase-first-word', `earwig-raw-command', for numbers
-;; `earwig-parse-number', for parts of the buffer `earwig-part-range'
-;; (earwig-edit.el), and for dates
-;; `earwig-when-regexp' and `earwig-spoken-time' (earwig-org.el), help
-;; in writing them.  Commands joined by `earwig-chain-words' ("cut that
-;; and then go to top and then paste") run one after another.  Ending
-;; with one of `earwig-cancel-words' ("cut that, never mind") runs
-;; nothing.
+;; Voice commands: earwig.el hands the cleaned-up text of a command
+;; recording (Cmd-f, F8), or with `earwig-wake-word-commands', what's
+;; said after a wake word while dictating, to `earwig-run-command'
+;; (earwig-grammar.el).  Commands are rules of a phony.el grammar,
+;; Earwig's defined with `earwig-defcommand' and yours with
+;; `phony-defun'; several can be said in a row ("cut that go to top
+;; paste"), with `earwig-chain-words' ("and then") between them or
+;; not.  Ending with one of `earwig-cancel-words' ("cut that, never
+;; mind") runs nothing.
+;;
+;; For commands of your own, the rules `earwig-number',
+;; `earwig-words', `earwig-text', `earwig-part', `earwig-target'
+;; (earwig-grammar.el) and `earwig-when' (earwig-org.el), and the
+;; functions `earwig-part-range', `earwig-target-range' (earwig-edit.el)
+;; and `earwig-spoken-time' (earwig-org.el), and `earwig-raw-command',
+;; help in writing them.
 ;;
 ;; A few commands use consult when it's installed, and built-in
 ;; commands otherwise: "search", "switch to buffer" and "go to heading".
@@ -45,6 +48,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'earwig-cleanup)
+(require 'earwig-grammar)
 (require 'earwig-edit)
 (require 'earwig-structure)
 (require 'earwig-org)
@@ -73,14 +77,6 @@ key only ever dictate."
   :type 'boolean
   :group 'earwig)
 
-(defcustom earwig-chain-words '("and then")
-  "Words between voice commands that run them one after another.
-As in \"select last sentence and then cut that\".  A phrase is split
-at them only when every part is a command; otherwise it's one command,
-as in \"replace and then with so\"."
-  :type '(repeat string)
-  :group 'earwig)
-
 (defcustom earwig-cancel-words '("cancel" "never mind" "nevermind")
   "Words that, said last, cancel a voice command, so nothing runs.
 As in \"select last sentence and then cut that, cancel\", with a
@@ -90,74 +86,17 @@ command of your own."
   :type '(repeat string)
   :group 'earwig)
 
-(defcustom earwig-extra-commands nil
-  "Voice commands of your own, as (PATTERN FUNCTION HELP).
-The same as for `earwig-commands', and tried before those, so they can
-also take over one of its phrases.  For example:
-
-  (add-to-list \\='earwig-extra-commands
-               \\='(\"toggle \\\\(?:the \\\\)?margins?\" olivetti-mode
-                 \"toggle margins\"))"
-  :type '(repeat (list (regexp :tag "Pattern")
-                       (function :tag "Function")
-                       (string :tag "Help")))
-  :group 'earwig)
+(defvar earwig-extra-commands nil
+  "No longer used: voice commands of your own are `phony-defun' rules.")
+(make-obsolete-variable 'earwig-extra-commands
+                        "define voice commands with `phony-defun', see the manual."
+                        "0.3.0")
 
 (defvar earwig--last-dictation nil
   "(START END TEXT) of the last dictation inserted, for \"scratch that\".
 START and END are markers; set by earwig.el.")
 
-(defvar earwig-raw-command nil
-  "While a voice command runs, its text before it was normalized.
-That's with its punctuation, which matching ignores; for commands that
-pass on what was said, like a prompt.")
-
-(defvar earwig-commands
-  `(;; Editing and moving around
-    ("save\\(?: \\(?:the \\)?\\(?:file\\|buffer\\)\\)?" save-buffer
-     "save [file | buffer]")
-    ("undo\\(?: that\\)?" undo
-     "undo [that]")
-    ("redo" undo-redo
-     "redo")
-    ("scratch that" earwig-cmd-scratch-that
-     "scratch that           (delete the last dictation)")
-    ("comment \\(?:that\\|this\\|line\\)" comment-line
-     "comment that           (region or line)")
-    ,@earwig-edit-commands
-    ,@earwig-structure-commands
-    ("close\\(?: \\(?:the \\|this \\)?buffer\\)?" kill-current-buffer
-     "close [buffer]")
-    ("go to line \\(.+\\)" earwig-cmd-goto-line
-     "go to line N           (\"forty two\" or 42)")
-    ("go to \\(?:the \\)?top" beginning-of-buffer
-     "go to [the] top")
-    ("go to \\(?:the \\)?bottom" end-of-buffer
-     "go to [the] bottom")
-    ("go to heading\\(?: \\(.+\\)\\)?" earwig-cmd-goto-heading
-     "go to heading [NAME]")
-    ("scroll down" scroll-up-command
-     "scroll down")
-    ("scroll up" scroll-down-command
-     "scroll up")
-    ("other window" other-window
-     "other window")
-    ("search\\(?: for\\)?\\(?: \\(.+\\)\\)?" earwig-cmd-search
-     "search [for] [TEXT]")
-    ("run command \\(.+\\)" earwig-cmd-run-command
-     "run command NAME       (\"org agenda\")")
-    ,@earwig-org-commands
-    ("switch\\(?: to\\)?\\(?: buffer\\)?\\(?: \\(.+\\)\\)?" earwig-cmd-switch-buffer
-     "switch to [buffer] [NAME] (\"init dot el\")")
-    ("what can i say" earwig-cmd-help
-     "what can I say"))
-  "Voice commands as (PATTERN FUNCTION HELP).
-PATTERN is a regexp matched, ignoring case, against the whole command
-text; the first match wins.  FUNCTION is called with PATTERN's groups as
-arguments; a command without groups is called interactively.  HELP is
-shown by \"what can I say\".  `earwig-extra-commands' are tried first.")
-
-;;;; Matching
+;;;; Wake and cancel words
 
 (defun earwig--strip-wake-word (text)
   "Return TEXT after a leading wake word, or nil if it doesn't start with one."
@@ -181,116 +120,6 @@ the cancel word as said.  Nil if TEXT doesn't end with one."
                                   "\\)\\b[,;:.!?]*[ \t\n]*\\'")
                           text)
         (cons (substring text 0 (match-beginning 0)) (match-string 1 text))))))
-
-(defun earwig--command-text (text)
-  "Return TEXT as a command, without punctuation and with single spaces.
-Dots inside words, as in \"init.el\", stay."
-  (string-trim
-   (replace-regexp-in-string
-    "[ \t\n]+" " "
-    (replace-regexp-in-string "[,;:]\\|[.?!]+\\(?:[ \t\n]\\|\\'\\)" " " text))))
-
-(defun earwig-find-command (text)
-  "Return (FUNCTION . ARGS) for the voice command TEXT, or nil if none matches.
-TEXT is matched as said, then with `earwig-corrections-commands' applied."
-  (let* ((text (earwig--command-text text))
-         (corrected (earwig-apply-corrections text t)))
-    (or (earwig--match-command text)
-        (and (not (equal corrected text))
-             (earwig--match-command corrected)))))
-
-(defun earwig--match-command (text)
-  "Return (FUNCTION . ARGS) for TEXT, a `earwig--command-text', or nil."
-  (let ((case-fold-search t))
-    (cl-loop for (pattern function) in (append earwig-extra-commands earwig-commands)
-             when (string-match (concat "\\`\\(?:" pattern "\\)\\'") text)
-             ;; Groups an optional part left unmatched are passed as nil
-             return (cons function
-                          (cl-loop for group from 1 to (regexp-opt-depth pattern)
-                                   collect (match-string group text))))))
-
-(defun earwig--chain-cuts (text)
-  "Return (END . START) of each of `earwig-chain-words' in TEXT.
-END is where the command before it ends, START where the next one
-starts; the punctuation around the words goes with them."
-  (when earwig-chain-words
-    (let ((case-fold-search t)
-          (regexp (concat "[,;:.!?]*[ \t\n]+" (regexp-opt earwig-chain-words 'words)
-                          "[,;:.!?]*[ \t\n]+"))
-          (start 0)
-          cuts)
-      (while (string-match regexp text start)
-        (push (cons (match-beginning 0) (match-end 0)) cuts)
-        (setq start (match-end 0)))
-      (nreverse cuts))))
-
-(defun earwig-find-commands (text)
-  "Return ((RAW FUNCTION . ARGS)...) for the voice commands TEXT chains, or nil.
-TEXT is split at `earwig-chain-words' into as many commands as it can
-be, each as for `earwig-find-command'; a part that's no command stays
-joined to the next.  RAW is a command's part of TEXT."
-  (cl-labels ((parse (start cuts)
-                (or (cl-loop for (cut . rest) on cuts
-                             for raw = (substring text start (car cut))
-                             for command = (earwig-find-command raw)
-                             for more = (and command (parse (cdr cut) rest))
-                             when more return (cons (cons raw command) more))
-                    (let* ((raw (substring text start))
-                           (command (earwig-find-command raw)))
-                      (and command (list (cons raw command)))))))
-    (parse 0 (earwig--chain-cuts text))))
-
-(defvar earwig--go-commands
-  '(earwig-cmd-go earwig-cmd-go-edge earwig-cmd-goto-line earwig-cmd-goto-heading
-    beginning-of-buffer end-of-buffer earwig-cmd-next-match)
-  "Functions of voice commands that \"go back\" returns from.")
-
-(defun earwig--run-step (command)
-  "Run COMMAND, a (FUNCTION . ARGS) of `earwig-find-command'.
-For one of `earwig--go-commands' that moves point, \"go back\" returns
-to where point was; not for \"next one\" after \"select WORDS\"."
-  (let ((from (point-marker)))
-    (unwind-protect
-        (progn
-          (if (or (cdr command) (not (commandp (car command))))
-              (apply (car command) (cdr command))
-            (call-interactively (car command)))
-          (when (and (memq (car command) earwig--go-commands)
-                     (eq (marker-buffer from) (current-buffer))
-                     (/= from (point))
-                     (not (and (eq (car command) 'earwig-cmd-next-match)
-                               (eq (nth 2 earwig--edit-last) 'select))))
-            (when (markerp earwig--go-from)
-              (set-marker earwig--go-from nil))
-            (setq earwig--go-from from
-                  from nil)))
-      (when from
-        (set-marker from nil)))))
-
-(defun earwig-run-command (text)
-  "Run the voice command TEXT, or the ones it chains, or say that none matches.
-Chained commands run in turn, each its own undo step, and stop at one
-that fails.  One that selects another buffer, as \"other window\" does,
-leaves the rest to run there."
-  (let ((steps (earwig-find-commands text)))
-    (if (null steps)
-        (message "No voice command for \"%s\"" (earwig--command-text text))
-      (cl-loop
-       for (raw . command) in steps
-       for step from 1
-       do (let ((buffer (window-buffer))
-                (earwig-raw-command raw))
-            (condition-case err
-                (earwig--run-step command)
-              (error
-               (message "Voice command \"%s\" failed%s: %s"
-                        (earwig--command-text raw)
-                        (if (cdr steps) (format " (step %d of %d)" step (length steps)) "")
-                        (error-message-string err))
-               (cl-return)))
-            (unless (eq (window-buffer) buffer)
-              (set-buffer (window-buffer)))
-            (undo-boundary))))))
 
 ;;;; Helpers
 
@@ -488,12 +317,11 @@ read the next."
     (setq earwig--last-dictation nil)
     (message "Scratched \"%s\"" (string-trim text))))
 
-(defun earwig-cmd-goto-line (number)
-  "Go to the line NUMBER says."
-  (let ((line (earwig-parse-number number t)))
-    (push-mark)
-    (goto-char (point-min))
-    (forward-line (1- line))))
+(defun earwig-cmd-goto-line (line)
+  "Go to line LINE, a number."
+  (push-mark)
+  (goto-char (point-min))
+  (forward-line (1- line)))
 
 (defun earwig-cmd-goto-heading (name)
   "Pick a heading, starting from spoken NAME, if any.
@@ -529,7 +357,104 @@ With `consult-line' if it's installed, else with isearch."
         (call-interactively command)
       (earwig-with-input (downcase name) #'execute-extended-command))))
 
+;;;; The commands' grammar
+
+(earwig-defcommand earwig-say-save ("save" (? (? "the") (| "file" "buffer")))
+  "Save the buffer."
+  :help "save [file | buffer]"
+  (call-interactively #'save-buffer))
+
+(earwig-defcommand earwig-say-undo ("undo" (? "that"))
+  "Undo."
+  :help "undo [that]"
+  (call-interactively #'undo))
+
+(earwig-defcommand earwig-say-redo "redo"
+  "Redo."
+  :help "redo"
+  (call-interactively #'undo-redo))
+
+(earwig-defcommand earwig-say-scratch-that "scratch that"
+  "Delete the last dictation."
+  :help "scratch that           (delete the last dictation)"
+  (earwig-cmd-scratch-that))
+
+(earwig-defcommand earwig-say-comment ("comment" (| "that" "this" "line"))
+  "Comment the region or line."
+  :help "comment that           (region or line)"
+  (call-interactively #'comment-line))
+
+(earwig-defcommand earwig-say-close ("close" (? (? (| "the" "this")) "buffer"))
+  "Close the buffer."
+  :help "close [buffer]"
+  (call-interactively #'kill-current-buffer))
+
+(earwig-defcommand earwig-say-goto-line ("go to line" (line earwig-number))
+  "Go to line LINE."
+  :help "go to line N           (\"forty two\" or 42)"
+  :go t
+  (earwig-cmd-goto-line line))
+
+(earwig-defcommand earwig-say-top ("go to" (? "the") "top")
+  "Go to the top of the buffer."
+  :help "go to [the] top"
+  :go t
+  (call-interactively #'beginning-of-buffer))
+
+(earwig-defcommand earwig-say-bottom ("go to" (? "the") "bottom")
+  "Go to the bottom of the buffer."
+  :help "go to [the] bottom"
+  :go t
+  (call-interactively #'end-of-buffer))
+
+(earwig-defcommand earwig-say-goto-heading ("go to heading" (? (name earwig-text)))
+  "Pick a heading, starting from NAME."
+  :help "go to heading [NAME]"
+  :go t
+  (earwig-cmd-goto-heading name))
+
+(earwig-defcommand earwig-say-scroll ("scroll" (direction (| "down" "up")))
+  "Scroll down or up (DIRECTION)."
+  :help "scroll down | up"
+  (call-interactively (if (equal direction "down") #'scroll-up-command #'scroll-down-command)))
+
+(earwig-defcommand earwig-say-other-window "other window"
+  "Select the other window."
+  :help "other window"
+  (call-interactively #'other-window))
+
+(earwig-defcommand earwig-say-search ("search" (? "for") (? (text earwig-text)))
+  "Search the buffer, starting from TEXT."
+  :help "search [for] [TEXT]"
+  (earwig-cmd-search text))
+
+(earwig-defcommand earwig-say-run-command ("run command" (name earwig-text))
+  "Run the command NAME."
+  :help "run command NAME       (\"org agenda\")"
+  (earwig-cmd-run-command name))
+
+(earwig-defcommand earwig-say-switch-buffer ("switch" (? "to") (? "buffer") (? (name earwig-text)))
+  "Switch buffers, starting from NAME."
+  :help "switch to [buffer] [NAME] (\"init dot el\")"
+  (earwig-cmd-switch-buffer name))
+
+(earwig-defcommand earwig-say-help "what can i say"
+  "List the voice commands."
+  :help "what can I say"
+  (earwig-cmd-help))
+
 ;;;; Help
+
+(defconst earwig--help-order
+  '(earwig-say-save earwig-say-undo earwig-say-redo earwig-say-scratch-that earwig-say-comment
+    earwig-say-edit earwig-say-format earwig-say-replace earwig-say-next-match earwig-say-go
+    earwig-say-go-edge earwig-say-go-back earwig-say-paste earwig-say-new-line
+    earwig-say-join earwig-say-structure earwig-say-close earwig-say-goto-line
+    earwig-say-top earwig-say-bottom earwig-say-goto-heading earwig-say-scroll
+    earwig-say-other-window earwig-say-search earwig-say-run-command
+    earwig-say-schedule earwig-say-mark-done earwig-say-toggle-todo earwig-say-agenda
+    earwig-say-switch-buffer earwig-say-help)
+  "Earwig's commands in the order \"what can I say\" lists them; others follow.")
 
 (defun earwig--help-rows (rows)
   "Print ROWS of (LEFT RIGHT) as two indented columns."
@@ -539,10 +464,53 @@ With `consult-line' if it's installed, else with isearch."
                    ((> (length left) 30) (format "  %s\n  %-30s %s\n" left "" right))
                    (t (format "  %-30s %s\n" left right)))))))
 
+(defun earwig--pattern-help (pattern &optional inner)
+  "Return the Phony PATTERN as \"what can I say\" shows it.
+INNER non-nil means it's part of a sequence, so alternatives need
+parentheses."
+  (let ((closed (lambda (pattern)
+                  (not (phony-pattern--collect
+                        (lambda (p) (or (phony-pattern--rule-p p)
+                                        (phony-pattern--builtin-word-p p)
+                                        (phony-pattern--builtin-phrase-p p)))
+                        pattern)))))
+    (cond
+     ((phony-pattern--literal-p pattern) (phony-pattern--literal-string pattern))
+     ((phony-pattern--sequence-p pattern)
+      (let ((parts (phony-pattern--sequence-patterns pattern)))
+        (mapconcat (lambda (part) (earwig--pattern-help part (cdr parts))) parts " ")))
+     ((phony-pattern--optional-p pattern)
+      (format "[%s]" (earwig--pattern-help (phony-pattern--optional-pattern pattern))))
+     ((phony-pattern--alternative-p pattern)
+      (format (if inner "(%s)" "%s")
+              (mapconcat #'earwig--pattern-help
+                         (phony-pattern--alternative-patterns pattern) " | ")))
+     ((phony-pattern--repeat-p pattern)
+      (format "%s..." (earwig--pattern-help (phony-pattern--repeat-pattern pattern) t)))
+     ((phony-pattern--argument-p pattern)
+      (let ((sub (phony-pattern--argument-pattern pattern)))
+        (if (funcall closed sub)
+            (earwig--pattern-help sub inner)
+          (upcase (symbol-name (phony-pattern--argument-name pattern))))))
+     ((phony-pattern--rule-p pattern)
+      (upcase (string-remove-prefix "earwig-" (symbol-name (phony-pattern--rule-name pattern)))))
+     ((phony-pattern--builtin-word-p pattern) "WORD")
+     (t "WORDS"))))
+
+(defun earwig--user-commands ()
+  "Return the names of the interactive Phony rules that aren't Earwig's."
+  (let ((grammar (plist-get (earwig--prepared) :grammar)))
+    (sort (cl-loop for rule in (phony--get-rules grammar)
+                   when (and (phony--procedure-rule-p rule)
+                             (phony--procedure-rule-interactive-p rule)
+                             (not (memq (phony--rule-name rule) earwig--commands)))
+                   collect (phony--rule-name rule))
+          (lambda (a b) (string< (symbol-name a) (symbol-name b))))))
+
 (defun earwig-cmd-help ()
   "List the voice commands.
 How to chain and cancel them and what TARGET can be come first, then
-Earwig's commands, then `earwig-extra-commands'."
+Earwig's commands, then the rest, your own."
   (with-help-window "*Voice commands*"
     (princ (format "Voice commands (%s%s)\n\n"
                    (mapconcat #'identity (earwig--mode-keys 'command) " or ")
@@ -551,21 +519,32 @@ Earwig's commands, then `earwig-extra-commands'."
                      "")))
     (earwig--help-rows
      (append
-      (when earwig-chain-words
-        (list (list (format "COMMAND %s COMMAND ..." (car earwig-chain-words))
-                    "one after another")))
+      (list (list (if earwig-chain-words
+                      (format "COMMAND [%s] COMMAND ..." (car earwig-chain-words))
+                    "COMMAND COMMAND ...")
+                  "one after another"))
       (when earwig-cancel-words
         (list (list (format "COMMAND ..., %s" (car earwig-cancel-words))
                     "runs nothing")))))
     (princ "\nTARGET, what an editing command acts on:\n\n")
     (earwig--help-rows earwig-edit-targets-help)
     (princ "\nCommands:\n\n")
-    (dolist (command earwig-commands)
-      (princ (format "  %s\n" (nth 2 command))))
-    (when earwig-extra-commands
-      (princ "\nYour commands (`earwig-extra-commands', tried first):\n\n")
-      (dolist (command earwig-extra-commands)
-        (princ (format "  %s\n" (nth 2 command)))))))
+    (dolist (name (append (seq-filter (lambda (name) (memq name earwig--commands))
+                                      earwig--help-order)
+                          (seq-remove (lambda (name) (memq name earwig--help-order))
+                                      earwig--commands)))
+      (let ((help (get name 'earwig-help)))
+        (when help
+          (princ (format "  %s\n" help)))))
+    (let ((user (earwig--user-commands)))
+      (when user
+        (princ "\nYour commands (Phony rules):\n\n")
+        (earwig--help-rows
+         (mapcar (lambda (name)
+                   (let ((rule (phony--get-rule name phony--default-grammar)))
+                     (list (earwig--pattern-help (phony--procedure-rule-pattern rule))
+                           (car (split-string (or (phony--rule-documentation rule) "") "\n")))))
+                 user))))))
 
 (provide 'earwig-commands)
 ;;; earwig-commands.el ends here

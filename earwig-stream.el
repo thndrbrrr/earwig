@@ -50,9 +50,9 @@
 ;; `earwig-provisional-command' too when it starts with a wake word.
 ;; An icon leads it, where it goes, as in the mode line: a red dot,
 ;; `earwig-recording-icon', or for a command a blue triangle,
-;; `earwig-command-icon', in place of the wake word and of each of
-;; `earwig-chain-words' that follows a command (that one is
-;; `earwig-provisional-chain-mark').
+;; `earwig-command-icon', in place of the wake word, and between the
+;; commands, where it takes the place of `earwig-chain-words' (that one
+;; is `earwig-provisional-chain-mark').
 ;; It's not in the buffer; the segment's final transcription replaces
 ;; it.  In dictation started with a tap, a key pressed while it shows
 ;; flushes it: it goes in as the segment's final text, before what the
@@ -106,9 +106,8 @@ background noise keeps segments from ending."
 (declare-function earwig--evil-stepped-back-p "earwig" (pos target))
 (declare-function earwig--drop-end-punctuation "earwig" (pos))
 (declare-function earwig--strip-wake-word "earwig-commands" (text))
-(declare-function earwig--chain-cuts "earwig-commands" (text))
-(declare-function earwig--command-text "earwig-commands" (text))
-(declare-function earwig-find-command "earwig-commands" (text))
+(declare-function earwig--command-text "earwig-grammar" (text))
+(declare-function earwig--command-parts "earwig-grammar" (text))
 (declare-function earwig--strip-cancel-word "earwig-commands" (text))
 (declare-function earwig--recorder-filter "earwig" (proc output))
 (declare-function earwig--show-phase "earwig" (phase))
@@ -179,10 +178,10 @@ a command given while dictating, the one before CMD,
   :group 'earwig-stream)
 
 (defcustom earwig-provisional-chain-mark nil
-  "Mark in place of chain words in provisional text of a command.
-It replaces each of `earwig-chain-words' once what's before it is a
-command, as in \"▶ select last sentence ▶ cut that\".  nil for
-`earwig-command-icon'.  In the color of `earwig-mode-line-command'."
+  "Mark between the commands in provisional text of a command.
+As in \"▶ select last sentence ▶ cut that\", where it also takes the
+place of `earwig-chain-words'.  nil for `earwig-command-icon'.  In the
+color of `earwig-mode-line-command'."
   :type '(choice (const :tag "The command icon" nil) string)
   :group 'earwig-stream)
 
@@ -583,9 +582,9 @@ color of `earwig-mode-line-command' unless the first sets one."
   "Return the provisional TEXT of a command, cleaned up, as it shows.
 That's without the wake word; with BARE, TEXT is a command said with a
 command key, which needs none, but loses one said by habit too.
-`earwig-provisional-chain-mark' takes the place of each of
-`earwig-chain-words' that follows a command, and what isn't (yet) a
-command is in `earwig-provisional', grey.  When TEXT ends with one of
+`earwig-provisional-chain-mark' goes between the commands, in place of
+`earwig-chain-words', and what isn't (yet) a command is in
+`earwig-provisional', grey.  When TEXT ends with one of
 `earwig-cancel-words', the commands are struck through before it."
   (let* ((rest (string-trim (or (earwig--strip-wake-word (concat text " "))
                                 (if bare text ""))))
@@ -593,19 +592,11 @@ command is in `earwig-provisional', grey.  When TEXT ends with one of
          (rest (if cancel (string-trim (car cancel)) rest))
          (mark (propertize (or earwig-provisional-chain-mark earwig-command-icon)
                            'face 'earwig-mode-line-command))
-         (from 0)
-         parts)
-    (pcase-dolist (`(,cut-end . ,cut-start) (earwig--chain-cuts rest))
-      (let ((part (substring rest from cut-end)))
-        (when (earwig-find-command part)
-          (push (earwig--command-text part) parts)
-          (setq from cut-start))))
-    (let ((tail (earwig--command-text (substring rest from))))
-      (push (if (or (string-empty-p tail) (earwig-find-command tail))
-                tail
-              (propertize tail 'face 'earwig-provisional))
-            parts))
-    (let ((shown (mapconcat #'identity (seq-remove #'string-empty-p (nreverse parts))
+         (parts (earwig--command-parts rest)))
+    (let ((shown (mapconcat #'identity
+                            (append (car parts)
+                                    (and (cdr parts)
+                                         (list (propertize (cdr parts) 'face 'earwig-provisional))))
                             (concat " " mark " "))))
       (if (not cancel)
           shown

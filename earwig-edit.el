@@ -27,9 +27,11 @@
 ;; verb works on every target: "select last two words", "delete that",
 ;; "capitalize deadline", "cut because through Friday".  "replace A with
 ;; B [in TARGET | everywhere]" takes the same targets as its scope.
-;; `earwig-edit-commands' goes into `earwig-commands', so like any
-;; voice command the whole phrase has to match, ignoring case and
-;; punctuation.  docs/manual.md has the same as a user's guide.
+;; The commands are rules of the voice command grammar
+;; (earwig-grammar.el), and the targets the rules `earwig-part' and
+;; `earwig-target'; a target's words must be in the buffer for a
+;; reading to be preferred.  docs/manual.md has the same as a user's
+;; guide.
 ;;
 ;; Verbs, in `earwig--edit-verbs':
 ;;   select                      a visual selection in evil's normal and
@@ -126,6 +128,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'earwig-grammar)
 
 (defvar earwig--last-dictation)
 (defvar evil-state)
@@ -133,7 +136,6 @@
 (defvar evil-visual-end)
 (defvar org-todo-keywords-1)
 (defvar org-emphasis-regexp-components)
-(declare-function earwig-parse-number "earwig-commands" (text &optional whole noerror))
 (declare-function earwig--match-case "earwig-cleanup" (match replacement))
 (declare-function earwig--keep-capital-p "earwig-cleanup" (word))
 (declare-function earwig--sentence-start-p "earwig-cleanup" (pos))
@@ -186,10 +188,6 @@ KIND is `select', `before' or `after'; for \"next one\".")
     (goto-char beg)
     (skip-chars-forward " \t\n" end)
     (cons (point) end)))
-
-(defun earwig--count (count)
-  "Return the number spoken as COUNT, one if nil."
-  (if count (earwig-parse-number count t) 1))
 
 (defun earwig--this-unit (unit)
   "Return (BEG . END) of the UNIT (a string) around point."
@@ -253,38 +251,36 @@ normal state the character under the cursor counts as before it."
              (earwig--trim start end)))
       (user-error "No region or dictation here")))
 
-(defun earwig--structural-range (spec)
-  "Return (BEG END . LINE-P) for SPEC if it names a part of the buffer, else nil.
-SPEC is lowercase; nil means the region.  LINE-P is non-nil for whole
-lines, so deleting them takes the newline too."
+(defun earwig--part-range (spec)
+  "Return (BEG END LINE-P) of the part of the buffer SPEC names, else nil.
+SPEC is an `earwig-target' spec; nil if it's words to find.  LINE-P is
+non-nil for whole lines, so deleting them takes the newline too."
   (let ((range
-         (cond
-          ((member spec '(nil "region" "the region" "selection" "the selection"))
-           (cons (or (earwig--region) (user-error "No region")) nil))
-          ((member spec '("that" "this" "it"))
-           (cons (earwig--that) nil))
-          ((string-match (concat "\\`\\(?:\\(?:this\\|the\\|current\\|the current\\) \\)?"
-                                 earwig--unit-regexp "\\'")
-                         spec)
-           (let ((unit (match-string 1 spec)))
-             (cons (earwig--this-unit unit) (equal unit "line"))))
-          ((string-match (concat "\\`\\(?:the \\)?\\(last\\|previous\\|next\\)"
-                                 "\\(?: \\(.+?\\)\\)? " earwig--unit-regexp "\\'")
-                         spec)
-           (let ((n (earwig--count (match-string 2 spec)))
-                 (unit (match-string 3 spec)))
-             (cons (if (equal (match-string 1 spec) "next")
-                       (earwig--next-units n unit)
-                     (earwig--last-units n unit))
-                   (equal unit "line"))))
-          ((string-match-p (concat "\\`\\(?:\\(?:the \\)?\\(?:whole \\|entire \\)?"
-                                   "\\(?:buffer\\|file\\)\\|everything\\|all\\)\\'")
-                           spec)
-           (cons (cons (point-min) (point-max)) nil)))))
+         (pcase spec
+           ('(region) (cons (or (earwig--region) (user-error "No region")) nil))
+           ('(that) (cons (earwig--that) nil))
+           (`(this ,unit) (cons (earwig--this-unit unit) (equal unit "line")))
+           (`(last ,n ,unit) (cons (earwig--last-units n unit) (equal unit "line")))
+           (`(next ,n ,unit) (cons (earwig--next-units n unit) (equal unit "line")))
+           ('(buffer) (cons (cons (point-min) (point-max)) nil)))))
     (when range
       (when (>= (caar range) (cdar range))
-        (user-error "Nothing there: %s" spec))
+        (user-error "Nothing there: %s" (earwig--spec-text spec)))
       (list (caar range) (cdar range) (cdr range)))))
+
+(defun earwig--spec-text (spec)
+  "Return the target SPEC in words, for a message."
+  (pcase spec
+    ('(region) "the region")
+    ('(that) "that")
+    (`(this ,unit) (concat "this " unit))
+    (`(,(and dir (or 'last 'next)) ,n ,unit)
+     (format "%s %s%s" dir (if (= n 1) "" (format "%s " n)) (if (= n 1) unit (concat unit "s"))))
+    ('(buffer) "the buffer")
+    (`(words ,words) words)
+    (`(through ,a ,b) (format "%s through %s" a b))
+    (`(in ,what ,part) (format "%s in %s" (earwig--spec-text (earwig-target-spec what))
+                               (earwig--spec-text (earwig-target-spec part))))))
 
 ;;;; Finding words
 
@@ -367,70 +363,71 @@ returns non-nil for counts, and that value is returned instead."
   (or (earwig--nearest (earwig--phrase-regexp phrase))
       (user-error "No \"%s\" here" phrase)))
 
-(defun earwig--splits (spec separator)
-  "Return the ways of splitting SPEC in two at SEPARATOR, a regexp, as (A . B).
-SEPARATOR matches ignoring case."
-  (let ((case-fold-search t)
-        (start 0) splits)
-    (while (string-match separator spec start)
-      (push (cons (substring spec 0 (match-beginning 0)) (substring spec (match-end 0)))
-            splits)
-      (setq start (1+ (match-beginning 0))))
-    (nreverse splits)))
-
-(defun earwig--through-range (spec &optional beg end)
-  "Return (BEG . END) for SPEC as \"A through B\" or \"from A to B\", or nil.
+(defun earwig--through-range (a b &optional beg end)
+  "Return (BEG . END) from the words A to the words B, or nil.
 Between BEG and END if given.  From the nearest A that has a B after
 it, so a common A like \"I\" skips the ones after the B meant."
-  (cl-some (pcase-lambda (`(,a . ,b))
-             (let ((to (earwig--phrase-regexp b)))
-               (earwig--nearest
-                (earwig--phrase-regexp a) beg end
-                (lambda (from)
-                  (save-excursion
-                    (goto-char (cdr from))
-                    (let ((case-fold-search t))
-                      (and (earwig--search to (or end (point-max)))
-                           (cons (car from) (match-end 0)))))))))
-           (append (earwig--splits spec " \\(?:through\\|thru\\|until\\) ")
-                   (and (string-prefix-p "from " spec)
-                        (earwig--splits (substring spec 5)
-                                          " \\(?:to\\|through\\|thru\\|until\\) ")))))
+  (let ((to (earwig--phrase-regexp b)))
+    (earwig--nearest
+     (earwig--phrase-regexp a) beg end
+     (lambda (from)
+       (save-excursion
+         (goto-char (cdr from))
+         (let ((case-fold-search t))
+           (and (earwig--search to (or end (point-max)))
+                (cons (car from) (match-end 0)))))))))
 
-(defun earwig--scoped (spec)
-  "Split SPEC as \"WORDS in TARGET\" into (WORDS BEG END), or return nil.
-Only when TARGET names a part of the buffer, so \"log in screen\" stays
-words.  SPEC is lowercase."
-  (cl-loop for (words . tail) in (earwig--splits spec " in ")
-           for range = (and (not (string-empty-p words)) (earwig--structural-range tail))
-           when range return (list words (car range) (cadr range))))
+(defun earwig--target (target)
+  "Return (BEG END LINE-P WORD-REGEXP) for TARGET, an `earwig-target'.
+Nil is the region.  WORD-REGEXP is set when TARGET is words, for \"next
+one\".  Signals a `user-error' if it isn't there."
+  (let ((spec (if target (earwig-target-spec target) '(region))))
+    (or (earwig--part-range spec)
+        (pcase-let ((`(,what ,beg ,end)
+                     (pcase spec
+                       (`(in ,what ,part)
+                        (cons (earwig-target-spec what)
+                              (earwig--part-range (earwig-target-spec part))))
+                       (_ (list spec)))))
+          (pcase what
+            (`(through ,a ,b)
+             (let ((range (or (earwig--through-range a b beg end)
+                              (user-error "No \"%s\" through \"%s\" %s"
+                                          a b (if beg "there" "here")))))
+               (list (car range) (cdr range) nil)))
+            (`(words ,words)
+             (let* ((regexp (earwig--phrase-regexp words))
+                    (range (or (earwig--nearest regexp beg end)
+                               (user-error "No \"%s\" %s" words (if beg "there" "here")))))
+               (list (car range) (cdr range) nil regexp)))
+            (_ (error "Not a target: %S" spec)))))))
 
-(defun earwig-part-range (spec)
-  "Return (BEG . END) of the part of the buffer SPEC names, or nil if none.
-SPEC is spoken, as an editing verb's target is: \"last two sentences\",
-\"this paragraph\", \"that\" (the region, or else the last dictation),
-\"the whole buffer\"; nil, \"region\" or \"selection\" is the region.
-Words to look for, which other targets can be, aren't parts of the
-buffer, so they give nil.  Signals a `user-error' if the part isn't
-there, as for \"selection\" with nothing selected.
+(defun earwig-target-range (target)
+  "Return (BEG . END) of TARGET, the value of an `earwig-target' rule.
+Nil is the region.  Signals a `user-error' if it isn't there, as for
+words that aren't in the buffer.  For commands of your own, see
+`earwig-part-range'."
+  (let ((range (earwig--target target)))
+    (cons (car range) (cadr range))))
 
-For commands of your own in `earwig-extra-commands' that act on a part
-of the buffer, as \"clean up last paragraph\" might."
-  (let ((range (earwig--structural-range (and spec (downcase (string-trim spec))))))
+(defun earwig-part-range (part)
+  "Return (BEG . END) of the part of the buffer PART names, or nil if none.
+PART is the value of an `earwig-part' rule, or a target spoken as in
+\"last two sentences\", \"this paragraph\", \"that\" (the region, or else
+the last dictation), \"the whole buffer\"; nil, \"region\" or
+\"selection\" is the region.  Words to look for, which other targets can
+be, aren't parts of the buffer, so they give nil.  Signals a
+`user-error' if the part isn't there, as for \"selection\" with nothing
+selected.
+
+For commands of your own that act on a part of the buffer, as \"clean
+up last paragraph\" might, see the manual."
+  (let* ((spec (cond ((null part) '(region))
+                     ((earwig-target-p part) (earwig-target-spec part))
+                     (t (let ((parts (earwig--parse-rule 'earwig-part (string-trim part))))
+                          (and parts (earwig-target-spec (car parts)))))))
+         (range (and spec (earwig--part-range spec))))
     (and range (cons (car range) (cadr range)))))
-
-(defun earwig--target (spec)
-  "Return (BEG END LINE-P WORD-REGEXP) for the target SPEC.
-WORD-REGEXP is set when SPEC was found as words, for \"next one\"."
-  (let ((spec (and spec (downcase spec))))
-    (or (earwig--structural-range spec)
-        (pcase-let ((`(,words ,beg ,end) (or (earwig--scoped spec) (list spec))))
-          (or (let ((range (earwig--through-range words beg end)))
-                (and range (list (car range) (cdr range) nil)))
-              (let* ((regexp (earwig--phrase-regexp words))
-                     (range (or (earwig--nearest regexp beg end)
-                                (user-error "No \"%s\" %s" words (if beg "there" "here")))))
-                (list (car range) (cdr range) nil regexp)))))))
 
 ;;;; Acting on a range
 
@@ -743,48 +740,50 @@ STYLE `plain' takes all markup off.  Returns a message saying what was done."
 
 ;;;; Commands
 
-(defun earwig-cmd-edit (spoken target)
-  "Do the verb SPOKEN to TARGET, see the commentary of earwig-edit.el."
-  (let ((verb (car (cl-find-if (lambda (v) (member (downcase spoken) (cdr v)))
-                               earwig--edit-verbs))))
-    (when (and (eq verb 'select) (null target) (not (earwig--region)))
-      (user-error "Select what?"))
-    (pcase-let ((`(,beg ,end ,line-p ,regexp) (earwig--target target)))
-      (setq earwig--edit-last (and regexp (eq verb 'select)
-                                     (list (current-buffer) regexp 'select beg end)))
-      (earwig--apply-verb verb beg end line-p))))
+(defun earwig-cmd-edit (verb target)
+  "Do VERB, a symbol of `earwig--edit-verbs', to TARGET, an `earwig-target'.
+Nil is the region.  See the commentary of earwig-edit.el."
+  (when (and (eq verb 'select) (null target) (not (earwig--region)))
+    (user-error "Select what?"))
+  (pcase-let ((`(,beg ,end ,line-p ,regexp) (earwig--target target)))
+    (setq earwig--edit-last (and regexp (eq verb 'select)
+                                 (list (current-buffer) regexp 'select beg end)))
+    (earwig--apply-verb verb beg end line-p)))
 
-(defun earwig-cmd-format (spoken target)
-  "Format TARGET in the style SPOKEN, or take that style off again.
-\"plain\" takes all markup off.  See the commentary of earwig-edit.el."
-  (let ((style (car (cl-find-if (lambda (s) (member (downcase spoken) (cdr s)))
-                                earwig--format-styles))))
-    (pcase-let ((`(,beg ,end) (earwig--target target)))
-      (let ((done (earwig--format style beg end)))
-        (earwig--done-with-region)
-        (message "%s" done)))))
+(defun earwig-cmd-format (style target)
+  "Format TARGET in STYLE, a symbol of `earwig--format-styles', or take it off.
+`plain' takes all markup off.  See the commentary of earwig-edit.el."
+  (pcase-let ((`(,beg ,end) (earwig--target target)))
+    (let ((done (earwig--format style beg end)))
+      (earwig--done-with-region)
+      (message "%s" done))))
 
 (defun earwig--go (kind beg end)
   "Put point before (KIND `before') or after BEG to END."
   (goto-char (if (eq kind 'before) beg end)))
 
-(defun earwig-cmd-go (where phrase)
-  "Move point before or after (WHERE) the nearest PHRASE.
-PHRASE may end in \"in TARGET\", to look only there."
-  (pcase-let* ((kind (intern (downcase where)))
-               (`(,words ,beg ,end) (or (earwig--scoped (downcase phrase)) (list phrase)))
-               (regexp (earwig--phrase-regexp words))
-               (range (or (earwig--nearest regexp beg end)
-                          (user-error "No \"%s\" %s" words (if beg "there" "here")))))
+(defun earwig--go-range (words part)
+  "Return (BEG . END) of the nearest WORDS, in PART if given, or nil.
+PART is an `earwig-part' value."
+  (let ((range (and part (earwig--part-range (earwig-target-spec part)))))
+    (earwig--nearest (earwig--phrase-regexp words) (car range) (cadr range))))
+
+(defun earwig-cmd-go (kind words part)
+  "Move point before or after (KIND `before' or `after') the nearest WORDS.
+In PART, an `earwig-part' value, if given."
+  (let ((range (or (earwig--go-range words part)
+                   (user-error "No \"%s\" %s" words (if part "there" "here")))))
     (push-mark nil t)
     (earwig--go kind (car range) (cdr range))
-    (setq earwig--edit-last (list (current-buffer) regexp kind (car range) (cdr range)))))
+    (setq earwig--edit-last (list (current-buffer) (earwig--phrase-regexp words) kind
+                                  (car range) (cdr range)))))
 
 (defun earwig-cmd-go-edge (edge unit)
-  "Move point to the start or end (EDGE) of the UNIT around it."
+  "Move point to the start or end (EDGE `start' or `end') of the UNIT around it.
+UNIT is \"line\", \"sentence\" or \"paragraph\"."
   (push-mark nil t)
-  (let ((start (member (downcase edge) '("start" "beginning"))))
-    (pcase (downcase unit)
+  (let ((start (eq edge 'start)))
+    (pcase unit
       ("line" (if start (beginning-of-line) (end-of-line)))
       ("sentence" (if start (backward-sentence) (forward-sentence)))
       ("paragraph" (if start
@@ -808,17 +807,17 @@ change where it goes, as it would with the mark."
 
 (defun earwig-cmd-next-match (direction)
   "Move the last word target selected or gone to on to the next match.
-DIRECTION is \"next\" or \"previous\"."
+DIRECTION is `next' or `previous'."
   (pcase-let ((`(,buffer ,regexp ,kind ,beg ,end) earwig--edit-last))
     (unless (eq buffer (current-buffer))
       (user-error "Nothing selected by voice here"))
     (let* ((case-fold-search t)
            (match (save-excursion
-                    (if (equal (downcase direction) "next")
+                    (if (eq direction 'next)
                         (progn (goto-char end) (earwig--search regexp nil))
                       (goto-char beg) (earwig--search regexp nil t)))))
       (unless match
-        (user-error "No %s match" (downcase direction)))
+        (user-error "No %s match" direction))
       (setq beg (match-beginning 0) end (match-end 0))
       (setq earwig--edit-last (list buffer regexp kind beg end))
       (if (eq kind 'select)
@@ -851,49 +850,47 @@ Returns the number replaced."
         (cl-incf count)))
     count))
 
-(defun earwig-cmd-replace (spec)
-  "Replace as SPEC says: \"A with B\", optionally \"in TARGET\" or \"everywhere\".
-Without a scope, the nearest A is replaced; with one, every A in it.
-\"replace that with B\" replaces the region when there is one."
+(defconst earwig--replace-region-words
+  '("that" "this" "it" "the region" "region" "the selection" "selection")
+  "What \"replace A with B\" can say as A for the region.")
+
+(defun earwig--replace-plan (old part everywhere)
+  "Return what to replace for \"replace OLD with ...\", or nil if nothing.
+In PART, an `earwig-part' value, or with EVERYWHERE, every OLD there:
+that's (scope BEG END); otherwise the nearest OLD, (nearest BEG END),
+or the region for \"replace that\", (region BEG END)."
+  (let ((scope (cond (everywhere (list (point-min) (point-max)))
+                     (part (earwig--part-range (earwig-target-spec part)))))
+        (regexp (earwig--phrase-regexp old))
+        ;; The whitespace around a selection stays
+        (region (let ((r (earwig--region))) (and r (earwig--trim (car r) (cdr r))))))
+    (cond
+     ((and region (null scope) (member (downcase old) earwig--replace-region-words))
+      (list 'region (car region) (cdr region)))
+     (scope
+      (and (earwig--matches regexp (car scope) (cadr scope))
+           (list 'scope (car scope) (cadr scope))))
+     (t
+      (let ((range (earwig--nearest regexp)))
+        (and range (list 'nearest (car range) (cdr range))))))))
+
+(defun earwig-cmd-replace (old new part everywhere)
+  "Replace OLD with NEW: the nearest OLD, or every one in PART or EVERYWHERE.
+PART is an `earwig-part' value.  \"replace that with B\" replaces the
+region when there is one."
   (barf-if-buffer-read-only)
-  (let* ((case-fold-search t)
-         (spec (string-trim spec))
-         (scope nil))
-    ;; The scope is a tail naming a part of the buffer; anything else is B
-    (if (string-match " everywhere\\'" spec)
-        (setq scope (list (point-min) (point-max))
-              spec (substring spec 0 (match-beginning 0)))
-      (cl-loop for (rest . tail) in (earwig--splits spec " in ")
-               for range = (earwig--structural-range (downcase tail))
-               when range do (setq scope range spec rest) and return nil))
+  (pcase-let ((`(,kind ,beg ,end) (or (earwig--replace-plan old part everywhere)
+                                      (user-error "Nothing to replace: \"%s\"" old))))
     (undo-boundary)
-    (let ((done
-           (cl-some
-            (pcase-lambda (`(,a . ,b))
-              (let ((regexp (earwig--phrase-regexp a))
-                    ;; The whitespace around a selection stays
-                    (region (let ((r (earwig--region))) (and r (earwig--trim (car r) (cdr r))))))
-                (cond
-                 ((and region (null scope)
-                       (member (downcase a) '("that" "this" "it" "the region" "region"
-                                              "the selection" "selection")))
-                  (let ((old (buffer-substring (car region) (cdr region))))
-                    (earwig--done-with-region)
-                    (goto-char (car region))
-                    (delete-region (car region) (cdr region))
-                    (insert (earwig--replacement-case (point) old b)))
-                  1)
-                 (scope
-                  (let ((count (earwig--replace-in regexp b (car scope) (cadr scope))))
-                    (and (> count 0) count)))
-                 (t
-                  (let ((range (earwig--nearest regexp)))
-                    (when range
-                      (earwig--replace-in regexp b (car range) (cdr range))))))))
-            (earwig--splits spec " with "))))
-      (unless done
-        (user-error "Nothing to replace in \"%s\"" spec))
-      (message "Replaced %d" done))))
+    (message "Replaced %d"
+             (if (eq kind 'region)
+                 (let ((text (buffer-substring beg end)))
+                   (earwig--done-with-region)
+                   (goto-char beg)
+                   (delete-region beg end)
+                   (insert (earwig--replacement-case (point) text new))
+                   1)
+               (earwig--replace-in (earwig--phrase-regexp old) new beg end)))))
 
 (defun earwig-cmd-paste ()
   "Paste the last kill, the way the buffer's own paste command would.
@@ -982,9 +979,9 @@ line put in, after its indentation, as with evil's paste."
       (skip-chars-forward " \t"))))
 
 (defun earwig-cmd-new-line (what)
-  "Start a new line, or with WHAT \"paragraph\", a new paragraph."
+  "Start a new line, or with WHAT `paragraph', a new paragraph."
   (delete-horizontal-space t)
-  (newline (if (equal (downcase what) "paragraph") 2 1)))
+  (newline (if (eq what 'paragraph) 2 1)))
 
 (defconst earwig-edit-targets-help
   '(("[the] selection"                 "the selection; also when TARGET is left out")
@@ -1000,33 +997,74 @@ line put in, after its indentation, as with evil's paste."
     (""                                "(\"meow in the last two sentences\")"))
   "What \"what can I say\" shows for TARGET, as (SPOKEN EXPLANATION).")
 
-(defconst earwig-edit-commands
-  `((,(concat "\\(" (regexp-opt (cl-mapcan (lambda (v) (copy-sequence (cdr v)))
-                                           earwig--edit-verbs))
-              "\\)\\(?: \\(.+\\)\\)?")
-     earwig-cmd-edit
-     "select | delete | cut | copy | capitalize | uppercase | lowercase | title case TARGET")
-    (,(concat "format \\("
-              (regexp-opt (cl-mapcan (lambda (s) (copy-sequence (cdr s))) earwig--format-styles))
-              "\\)\\(?: \\(.+\\)\\)?")
-     earwig-cmd-format
-     "format bold | italic | underline | code | verbatim | strike through | plain TARGET")
-    ("replace \\(.+\\)" earwig-cmd-replace
-     "replace A with B [in TARGET | everywhere]")
-    ("\\(next\\|previous\\) \\(?:one\\|match\\)" earwig-cmd-next-match
-     "next | previous one    (after select WORDS or go before/after)")
-    ("go \\(before\\|after\\) \\(.+\\)" earwig-cmd-go
-     "go before | after WORDS [in TARGET]")
-    ("go to \\(?:the \\)?\\(start\\|beginning\\|end\\) of \\(?:the \\|this \\)?\\(line\\|sentence\\|paragraph\\)"
-     earwig-cmd-go-edge
-     "go to [the] start | end of line | sentence | paragraph")
-    ("go back" earwig-cmd-go-back
-     "go back")
-    ("paste\\(?: that\\| it\\)?" earwig-cmd-paste
-     "paste")
-    ("new \\(line\\|paragraph\\)" earwig-cmd-new-line
-     "new line | paragraph"))
-  "Editing entries for `earwig-commands'.")
+;;;; The commands' grammar
+
+(phony-define-dictionary earwig-verb
+  "An editing verb; its value is a symbol of `earwig--edit-verbs'."
+  (cl-loop for (verb . spoken) in earwig--edit-verbs
+           append (mapcar (lambda (word) (cons word verb)) spoken)))
+
+(phony-define-dictionary earwig-format-style
+  "A style for \"format\"; its value is a symbol of `earwig--format-styles'."
+  (cl-loop for (style . spoken) in earwig--format-styles
+           append (mapcar (lambda (word) (cons word style)) spoken)))
+
+(earwig-defcommand earwig-say-edit ((verb earwig-verb) (? (target earwig-target)))
+  "Do VERB to TARGET, or to the region."
+  :help "select | delete | cut | copy | capitalize | uppercase | lowercase | title case TARGET"
+  :check (or target (earwig--region))
+  (earwig-cmd-edit verb target))
+
+(earwig-defcommand earwig-say-format ("format" (style earwig-format-style)
+                                      (? (target earwig-target)))
+  "Format TARGET, or the region, in STYLE."
+  :help "format bold | italic | underline | code | verbatim | strike through | plain TARGET"
+  :check (and (earwig--format-entry) (or target (earwig--region)))
+  (earwig-cmd-format style target))
+
+(earwig-defcommand earwig-say-replace
+    ("replace" (old earwig-words) "with" (new earwig-text)
+     (? (| (seq "in" (part earwig-part)) (everywhere "everywhere"))))
+  "Replace OLD with NEW, nearest, in PART or EVERYWHERE."
+  :help "replace A with B [in TARGET | everywhere]"
+  :check (earwig--replace-plan old part everywhere)
+  (earwig-cmd-replace old new part (and everywhere t)))
+
+(earwig-defcommand earwig-say-next-match ((direction (| "next" "previous")) (| "one" "match"))
+  "Move the last word target selected or gone to on, in DIRECTION."
+  :help "next | previous one    (after select WORDS or go before/after)"
+  :go t
+  (earwig-cmd-next-match (intern direction)))
+
+(earwig-defcommand earwig-say-go ("go" (kind (| "before" "after")) (words earwig-words)
+                                  (? "in" (part earwig-part)))
+  "Go before or after (KIND) the nearest WORDS, in PART if given."
+  :help "go before | after WORDS [in TARGET]"
+  :check (earwig--go-range words part)
+  :go t
+  (earwig-cmd-go (intern kind) words part))
+
+(earwig-defcommand earwig-say-go-edge ("go to" (? "the") (edge (| "start" "beginning" "end")) "of"
+                                       (? (| "the" "this")) (unit (| "line" "sentence" "paragraph")))
+  "Go to the start or end (EDGE) of the UNIT around point."
+  :help "go to [the] start | end of line | sentence | paragraph"
+  :go t
+  (earwig-cmd-go-edge (if (equal edge "end") 'end 'start) unit))
+
+(earwig-defcommand earwig-say-go-back "go back"
+  "Go back to where point was before the last \"go\"."
+  :help "go back"
+  (earwig-cmd-go-back))
+
+(earwig-defcommand earwig-say-paste ("paste" (? (| "that" "it")))
+  "Paste the last kill."
+  :help "paste"
+  (earwig-cmd-paste))
+
+(earwig-defcommand earwig-say-new-line ("new" (what (| "line" "paragraph")))
+  "Start a new line or paragraph (WHAT)."
+  :help "new line | paragraph"
+  (earwig-cmd-new-line (intern what)))
 
 (provide 'earwig-edit)
 ;;; earwig-edit.el ends here

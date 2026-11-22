@@ -23,13 +23,14 @@ This README covers installing, setting up and using Earwig. The [manual](docs/ma
 - **Voice commands** to select, delete, move, format and replace text by a verb and a target, to add headings and list items in Org and Markdown, and to get around Emacs.
 - **Commands while dictating:** pause, say "okay" and one or more commands, and carry on dictating.
 - **Corrections** that Earwig learns, so a word misheard once is right from then on.
-- **Commands of your own**, a regexp and a function each.
+- **Commands of your own**, as [phony.el](https://github.com/ErikPrantare/phony.el) grammar rules.
 - **Local transcription** by [Orukeet](https://github.com/Oruk-AI/orukeet).
 
 ## Requirements
 
 - macOS
 - Emacs 29.1 or newer
+- [phony.el](https://github.com/ErikPrantare/phony.el) 3.0.0 or newer, from MELPA (installed with Earwig when MELPA is in `package-archives`)
 - curl
 - sox (recommended) for recording; or ffmpeg (which doesn't support streaming though)
 - [Orukeet](https://github.com/Oruk-AI/orukeet) with its speech server (requires Python 3.12)
@@ -129,7 +130,7 @@ Push-to-talk is off until you turn it on with `(setopt earwig-push-to-talk t)`. 
 - **Text appears as you talk**, grey until a pause, then final. A command said after "okay" shows in blue and runs at the next pause.
 - **Dictation follows point:** click somewhere else, or say "okay, go to top", and what you say next goes there.
 - **A voice command runs only when you stop it.** Forgot to tap Cmd-f again? Nothing happens, as Earwig is still listening. To have a pause end the command instead, set `(setopt earwig-command-auto-stop 1.5)`: recording stops after 1.5 seconds of silence once what you said is a complete command.
-- **Chain commands** with "and then": "select last sentence and then format bold". End with "never mind" or "cancel" and nothing runs.
+- **Several commands in a row:** "select last sentence format bold", or with "and then" between them. End with "never mind" or "cancel" and nothing runs.
 - **Undo:** each command, and each stretch of dictation, is one undo step. "scratch that" takes back the last dictation.
 
 The manual has the details: [how a command is recognized](docs/manual.md#how-a-command-is-recognized), [commands while dictating](docs/manual.md#commands-while-dictating), and [streaming](docs/manual.md#streaming-and-provisional-text).
@@ -199,22 +200,21 @@ The manual has [every option](docs/manual.md#customization-reference).
 
 ## Commands of your own
 
-Add voice commands to `earwig-extra-commands`, each as `(PATTERN FUNCTION HELP)`. PATTERN is a regexp matched against the whole command, ignoring case and punctuation. FUNCTION gets the regexp's groups as arguments, or is called interactively if there are none. HELP is what "what can I say" shows. Your commands are tried before Earwig's own.
+Voice commands, Earwig's and yours, are rules of a [phony.el](https://github.com/ErikPrantare/phony.el) grammar. Define yours with `phony-defun`: a name, a pattern of words, an optional docstring and the body that runs. They're found in what's said like Earwig's, and win over Earwig's for the same words.
 
 ```elisp
 (with-eval-after-load 'earwig
-  (setq earwig-extra-commands
-        '(("toggle \\(?:the \\)?margins?" olivetti-mode
-           "toggle margins")
-          ;; "find note emacs" opens find-file with "emacs" filled in
-          ("find note\\(?: \\(.+\\)\\)?" my/find-note
-           "find note [NAME]"))))
+  (phony-defun my/toggle-margins ("toggle" (? "the") (| "margin" "margins"))
+    "Toggle the margins."
+    (call-interactively #'olivetti-mode))
 
-(defun my/find-note (name)
-  (earwig-with-input (earwig-downcase-first-word name) #'find-file))
+  ;; "find note emacs" opens find-file with "emacs" filled in
+  (phony-defun my/find-note ("find note" (? (name earwig-text)))
+    "Find a note."
+    (earwig-with-input (earwig-downcase-first-word name) #'find-file)))
 ```
 
-Earwig has helpers for commands like these, such as `earwig-parse-number` for spoken numbers and `earwig-part-range` for targets like "this paragraph". The manual describes [all the helpers, with more examples](docs/manual.md#commands-of-your-own).
+Earwig has rules and helpers for commands like these, such as `earwig-number` for spoken numbers and `earwig-part` for targets like "this paragraph". The manual describes [all of them, with more examples](docs/manual.md#commands-of-your-own). Commands of your own used to be regexps in `earwig-extra-commands`, which is no longer used: rewrite them with `phony-defun`.
 
 ## Troubleshooting
 
@@ -227,16 +227,17 @@ Run `M-x earwig-check-setup` first. Beyond what it finds:
 | Holding the space bar only types spaces | Turn on `earwig-push-to-talk`, and turn off press and hold (Setup, step 3)                              |
 | The same word keeps coming out wrong    | Fix it once with Cmd-e; Earwig remembers it                                                             |
 | A voice command does nothing            | It runs only once you stop it: tap Cmd-f again, or set `earwig-command-auto-stop` to have a pause stop it |
-| A command isn't recognized              | Say "what can I say"; a command has to match the whole phrase                                           |
+| A command isn't recognized              | Say "what can I say"; all of what you say has to read as commands                                       |
 
 The manual has [more](docs/manual.md#troubleshooting), on streaming and push-to-talk timing among others.
 
 ## Development
 
-Run the tests from the repository. `earwig-test-stream` and `earwig-test-record-runs-whole` send speech made by macOS's `say` through the server, and are skipped unless both are there. `earwig-test-paste-evil` is skipped unless evil is on the load path (add `-L path/to/evil`).
+Run the tests from the repository, with phony.el installed. `earwig-test-stream` and `earwig-test-record-runs-whole` send speech made by macOS's `say` through the server, and are skipped unless both are there. `earwig-test-paste-evil` is skipped unless evil is on the load path (add `-L path/to/evil`).
 
 ```sh
 emacs -Q --batch -L . \
+  --eval '(progn (package-initialize) (require (quote phony)))' \
   -l test/earwig-test.el -f ert-run-tests-batch-and-exit
 ```
 

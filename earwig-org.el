@@ -31,12 +31,13 @@
 ;;   toggle todo                 the next TODO state
 ;; and "open agenda", the agenda dispatcher.
 ;;
-;; `earwig-when-regexp' and `earwig-spoken-time' are there for commands
-;; of your own that take a date, too.
+;; The rule `earwig-when' and `earwig-spoken-time' are there for
+;; commands of your own that take a date, too.
 
 ;;; Code:
 
 (require 'subr-x)
+(require 'earwig-grammar)
 
 ;; Org is only loaded when a command needs it
 (declare-function org-read-date "org" (&optional with-time to-time from-string &rest _))
@@ -44,17 +45,24 @@
 (declare-function org-schedule "org" (arg &optional time))
 (declare-function org-agenda-todo "org-agenda" (&optional arg))
 (declare-function org-agenda-schedule "org-agenda" (arg &optional time))
+(declare-function org-agenda "org-agenda" (&optional arg keys restriction))
 
-(defconst earwig-when-regexp
-  (concat "today\\|tomorrow\\|next week\\|next month\\|\\(?:on \\)?"
-          (regexp-opt '("monday" "tuesday" "wednesday" "thursday" "friday"
-                        "saturday" "sunday")))
-  "Regexp for a spoken date, as \"tomorrow\" or \"on Friday\".
-For commands that take a date; `earwig-spoken-time' makes it a time.")
+(defconst earwig--weekdays
+  '("monday" "tuesday" "wednesday" "thursday" "friday" "saturday" "sunday")
+  "The days of the week, as said.")
+
+(phony-define-dictionary earwig-when
+  "A spoken date, as \"tomorrow\" or \"on Friday\".
+For commands that take a date; its value is what was said, lowercased,
+which `earwig-spoken-time' makes a time."
+  (mapcar (lambda (when) (cons when when))
+          (append '("today" "tomorrow" "next week" "next month")
+                  earwig--weekdays
+                  (mapcar (lambda (day) (concat "on " day)) earwig--weekdays))))
 
 (defun earwig-spoken-time (when)
   "Return the time spoken as WHEN (\"tomorrow\", \"on Friday\", ...), or nil.
-See `earwig-when-regexp'; \"someday\" or no WHEN is nil."
+See the rule `earwig-when'; \"someday\" or no WHEN is nil."
   (require 'org)
   (let ((when (and when (string-remove-prefix "on " (downcase when)))))
     (unless (member when '(nil "someday"))
@@ -82,17 +90,25 @@ See `earwig-when-regexp'; \"someday\" or no WHEN is nil."
   "Cycle the TODO state of the Org entry at point, or the agenda item."
   (call-interactively (if (derived-mode-p 'org-agenda-mode) #'org-agenda-todo #'org-todo)))
 
-(defconst earwig-org-commands
-  `((,(concat "schedule\\(?: it\\| this\\)?\\(?: for\\)? \\(" earwig-when-regexp "\\)")
-     earwig-cmd-schedule
-     "schedule [it] [for] today | tomorrow | next week | next month | on DAY")
-    ("mark \\(?:it \\|this \\)?\\(?:done\\|dunn\\)" earwig-cmd-mark-done
-     "mark [it] done")
-    ("toggle \\(?:todo\\|toto\\)" earwig-cmd-toggle-todo
-     "toggle todo")
-    ("open \\(?:the \\)?agenda" org-agenda
-     "open agenda"))
-  "Org entries for `earwig-commands'.")
+(earwig-defcommand earwig-say-schedule ("schedule" (? (| "it" "this")) (? "for") (when earwig-when))
+  "Schedule the Org entry at point, or the agenda item, for WHEN."
+  :help "schedule [it] [for] today | tomorrow | next week | next month | on DAY"
+  (earwig-cmd-schedule when))
+
+(earwig-defcommand earwig-say-mark-done ("mark" (? (| "it" "this")) (| "done" "dunn"))
+  "Mark the Org entry at point, or the agenda item, as done."
+  :help "mark [it] done"
+  (earwig-cmd-mark-done))
+
+(earwig-defcommand earwig-say-toggle-todo ("toggle" (| "todo" "toto"))
+  "Cycle the TODO state of the Org entry at point, or the agenda item."
+  :help "toggle todo"
+  (earwig-cmd-toggle-todo))
+
+(earwig-defcommand earwig-say-agenda ("open" (? "the") "agenda")
+  "Open the agenda dispatcher."
+  :help "open agenda"
+  (call-interactively #'org-agenda))
 
 (provide 'earwig-org)
 ;;; earwig-org.el ends here

@@ -5,7 +5,7 @@
 ;; Author: thndrbrrr <thndrbrrr@gmail.com>
 ;; Maintainer: thndrbrrr <thndrbrrr@gmail.com>
 ;; Version: 0.2.0
-;; Package-Requires: ((emacs "29.1"))
+;; Package-Requires: ((emacs "29.1") (phony "3.0.0"))
 ;; URL: https://github.com/thndrbrrr/earwig
 ;; Keywords: convenience, multimedia, text, speech, dictation, voice
 ;; Assisted-by: Claude:claude-opus-5-5
@@ -553,10 +553,7 @@ ending with one of `earwig-cancel-words'.  See `earwig--preview-heard'."
           (let* ((text (earwig-clean raw))
                  (text (string-trim (or (earwig--strip-wake-word text) text))))
             (and (or (earwig--strip-cancel-word text)
-                     ;; The space lets one at the end match
-                     (and (not (seq-some (lambda (cut) (> (cdr cut) (length text)))
-                                         (earwig--chain-cuts (concat text " "))))
-                          (earwig-find-commands text)))
+                     (earwig-commands-complete-p text))
                  t))))))
 
 (defun earwig--auto-stop-cancel ()
@@ -927,7 +924,7 @@ held down, it records until let go."
 (defun earwig-command ()
   "Give a voice command: tap to start and tap again to stop, or push to talk.
 Stopping runs the command spoken.  Pushed to talk, held down, it records
-until let go.  See `earwig-commands', or say \"what can I say\"."
+until let go.  Say \"what can I say\" for the commands."
   (interactive)
   (earwig--tap-or-hold (lambda () (earwig--toggle-recording 'command)) t))
 
