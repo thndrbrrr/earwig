@@ -34,11 +34,12 @@
 ;; mind") runs nothing.
 ;;
 ;; For commands of your own, the rules `earwig-number',
-;; `earwig-words', `earwig-text', `earwig-part', `earwig-target'
-;; (earwig-grammar.el) and `earwig-when' (earwig-org.el), and the
-;; functions `earwig-part-range', `earwig-target-range' (earwig-edit.el)
-;; and `earwig-spoken-time' (earwig-org.el), and `earwig-raw-command',
-;; help in writing them.
+;; `earwig-words', `earwig-text', `earwig-part', `earwig-target',
+;; `earwig-destination' (earwig-grammar.el) and `earwig-when'
+;; (earwig-org.el), and the functions `earwig-part-range',
+;; `earwig-target-range', `earwig-target-ranges' (earwig-edit.el) and
+;; `earwig-spoken-time' (earwig-org.el), and `earwig-raw-command', help
+;; in writing them.
 ;;
 ;; A few commands use consult when it's installed, and built-in
 ;; commands otherwise: "search", "switch to buffer" and "go to heading".
@@ -51,6 +52,7 @@
 (require 'earwig-grammar)
 (require 'earwig-edit)
 (require 'earwig-structure)
+(require 'earwig-move)
 (require 'earwig-org)
 
 ;; Packages the commands use are only loaded when a command needs them
@@ -448,7 +450,10 @@ With `consult-line' if it's installed, else with isearch."
 (defconst earwig--help-order
   '(earwig-say-save earwig-say-undo earwig-say-redo earwig-say-scratch-that earwig-say-comment
     earwig-say-edit earwig-say-format earwig-say-replace earwig-say-next-match earwig-say-go
-    earwig-say-go-edge earwig-say-go-back earwig-say-paste earwig-say-new-line
+    earwig-say-go-to earwig-say-go-back earwig-say-paste earwig-say-new-line
+    earwig-say-move earwig-say-copy-to earwig-say-swap earwig-say-duplicate earwig-say-rewrite
+    earwig-say-put-around earwig-say-unwrap earwig-say-replace-pair earwig-say-new-at
+    earwig-say-go-into earwig-say-open-link earwig-say-focus earwig-say-where
     earwig-say-join earwig-say-structure earwig-say-close earwig-say-goto-line
     earwig-say-top earwig-say-bottom earwig-say-goto-heading earwig-say-scroll
     earwig-say-other-window earwig-say-search earwig-say-run-command

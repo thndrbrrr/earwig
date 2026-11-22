@@ -63,7 +63,7 @@
 
 (declare-function earwig-apply-corrections "earwig-cleanup" (text &optional commands))
 (declare-function earwig-parse-number "earwig-commands" (text &optional whole noerror))
-(declare-function earwig-target-range "earwig-edit" (target))
+(declare-function earwig--ranges "earwig-edit" (target))
 
 (defvar earwig-raw-command nil
   "While a voice command runs, its text before it was normalized.
@@ -272,18 +272,33 @@ says no number is ruled out."
 ;;;; Targets
 
 ;; What an editing verb acts on.  Rules contributing to `earwig-part'
-;; name a part of the buffer; `earwig-target' is those or words to find
-;; in it.  Their values are `earwig-target' objects, which
-;; `earwig-target-range' and `earwig-part-range' (earwig-edit.el) turn
+;; name a part of the buffer; `earwig-target' is those, words to find in
+;; it, and targets made of others: "the end of TARGET", "every WORDS",
+;; "A and B".  Their values are `earwig-target' objects, which
+;; `earwig-target-ranges' and `earwig-part-range' (earwig-edit.el) turn
 ;; into positions.
+;;
+;; Phony can't parse a rule that refers to itself, so targets made of
+;; targets come in layers: `earwig--simple-target' (a part, words, A
+;; through B, WORDS in PART, the next WORDS), then `earwig--one-target'
+;; (also the start or end of one of those, and every WORDS), then
+;; "A and B" of those.  Parts under a heading take `earwig--heading', a
+;; part that names a heading.
 
 (cl-defstruct (earwig-target (:constructor earwig--target-make (spec))
                              (:copier nil))
   "What a voice command acts on.
-SPEC is one of (region), (that), (this UNIT), (last N UNIT), (next N
-UNIT), (buffer), (words TEXT), (through A B) or (in WHAT PART), where
-UNIT is \"word\", \"sentence\", \"paragraph\" or \"line\", A and B are
-words, WHAT is a words or through target and PART a part's."
+SPEC is one of these, where UNIT is a value of `earwig-unit', WORDS,
+A and B are words, and PART and TARGET other `earwig-target's:
+  parts of the buffer: (region), (that), (this UNIT), (last N UNIT),
+    (next N UNIT), (buffer), (with UNIT WORDS), (parent), (body
+    PART), (under PART), (subheadings PART)
+  words in it: (words WORDS), (through A B), (in TARGET PART), (every
+    WORDS PART), (near DIRECTION WORDS)
+  made of others: (edge EDGE TARGET), (and FORCED TARGET...)
+DIRECTION is `next' or `previous', EDGE `start' or `end'.  FORCED
+non-nil means \"both\" or \"each of\" was said, so it's several
+targets even if \"A and B\" is in the buffer as words."
   spec)
 
 (phony-define-dictionary earwig-unit
@@ -291,10 +306,16 @@ words, WHAT is a words or through target and PART a part's."
   '(("word" . "word") ("words" . "word")
     ("sentence" . "sentence") ("sentences" . "sentence")
     ("paragraph" . "paragraph") ("paragraphs" . "paragraph")
-    ("line" . "line") ("lines" . "line")))
+    ("line" . "line") ("lines" . "line")
+    ("heading" . "heading") ("headings" . "heading")
+    ("headline" . "heading") ("headlines" . "heading")
+    ("section" . "section") ("sections" . "section")
+    ("subtree" . "section") ("subtrees" . "section")
+    ("item" . "item") ("items" . "item") ("bullet" . "item") ("bullets" . "item")
+    ("link" . "link") ("links" . "link")))
 
 (phony-define-open-rule earwig-part
-  "A part of the buffer, as \"this paragraph\" or \"last two words\".")
+  "A part of the buffer, as \"this paragraph\" or \"the section with budget\".")
 
 (phony-define-open-rule earwig-target
   "What an editing verb acts on: a part of the buffer, or words in it.")
@@ -305,7 +326,7 @@ words, WHAT is a words or through target and PART a part's."
   (earwig--target-make '(region)))
 
 (phony-defun earwig-part-that ((| "that" "this" "it"))
-  "The region, or else the last dictation."
+  "The region, or else the text that went in last, dictated or not."
   :contributes-to earwig-part
   (earwig--target-make '(that)))
 
@@ -325,6 +346,39 @@ words, WHAT is a words or through target and PART a part's."
   "The whole buffer."
   :contributes-to earwig-part
   (earwig--target-make '(buffer)))
+
+(phony-defun earwig-part-with ((? "the") (unit earwig-unit) (| "with" "containing")
+                               (words earwig-words))
+  "The UNIT with WORDS in it; for a heading or section, in its title."
+  :contributes-to earwig-part
+  (earwig--target-make (list 'with unit words)))
+
+(phony-defun earwig-part-parent ((| "the heading above" "the parent heading"))
+  "The heading above the one point is under."
+  :contributes-to earwig-part
+  (earwig--target-make '(parent)))
+
+(phony-defun earwig--heading ((heading (| earwig-part-this earwig-part-units earwig-part-parent
+                                          earwig-part-with)))
+  "A part that names a heading, as \"this heading\" or \"the section with budget\"."
+  :interactive nil
+  heading)
+
+(phony-defun earwig-part-body ((| "the body of" "body of" "the text under" "text under")
+                               (heading earwig--heading))
+  "The text of HEADING itself, without its subheadings, planning or drawers."
+  :contributes-to earwig-part
+  (earwig--target-make (list 'body heading)))
+
+(phony-defun earwig-part-under ("everything under" (heading earwig--heading))
+  "HEADING's section without its heading line."
+  :contributes-to earwig-part
+  (earwig--target-make (list 'under heading)))
+
+(phony-defun earwig-part-subheadings ((? "the") "subheadings" (? "of" (heading earwig--heading)))
+  "The subheadings of HEADING, or of the heading point is under."
+  :contributes-to earwig-part
+  (earwig--target-make (list 'subheadings heading)))
 
 (phony-defun earwig-target-part ((part earwig-part))
   "A part of the buffer."
@@ -348,12 +402,84 @@ words, WHAT is a words or through target and PART a part's."
   :contributes-to earwig-target
   (earwig--target-make (list 'through from to)))
 
+(phony-defun earwig-target-near ((? "the") (direction (| "next" "following" "previous" "preceding"))
+                                 (words earwig-words))
+  "The next or previous place WORDS are, from point."
+  :contributes-to earwig-target
+  (earwig--target-make (list 'near (if (member direction '("next" "following")) 'next 'previous)
+                             words)))
+
 (phony-defun earwig-target-in ((what (| earwig-target-words earwig-target-through
-                                        earwig-target-from))
+                                        earwig-target-from earwig-target-near))
                                "in" (part earwig-part))
   "WHAT, looked for only in PART."
   :contributes-to earwig-target
   (earwig--target-make (list 'in what part)))
+
+(phony-defun earwig--simple-target ((target (| earwig-target-part earwig-target-words
+                                               earwig-target-through earwig-target-from
+                                               earwig-target-near earwig-target-in)))
+  "A target that isn't made of other targets."
+  :interactive nil
+  target)
+
+(phony-defun earwig-target-edge ((? "the") (edge (| "start" "beginning" "end")) "of"
+                                 (target earwig--simple-target))
+  "The start or end of TARGET, an empty place."
+  :contributes-to earwig-target
+  (earwig--target-make (list 'edge (if (equal edge "end") 'end 'start) target)))
+
+(phony-defun earwig-target-every ((| "every" "each") (words earwig-words)
+                                  (? "in" (part earwig-part)))
+  "Every place WORDS are, in PART if given."
+  :contributes-to earwig-target
+  (earwig--target-make (list 'every words part)))
+
+(phony-defun earwig--one-target ((target (| earwig--simple-target earwig-target-edge
+                                            earwig-target-every)))
+  "A target that isn't several joined by \"and\"."
+  :interactive nil
+  target)
+
+(phony-defun earwig-target-and ((a earwig--one-target) "and" (b earwig--one-target))
+  "A and B, where \"A and B\" isn't in the buffer as words."
+  :contributes-to earwig-target
+  (earwig--target-make (list 'and nil a b)))
+
+(phony-defun earwig-target-both ("both" (a earwig--one-target) "and" (b earwig--one-target))
+  "A and B, even where \"A and B\" is in the buffer as words."
+  :contributes-to earwig-target
+  (earwig--target-make (list 'and t a b)))
+
+(phony-defun earwig-target-each ("each of" (a earwig--one-target) (more (* earwig--one-target))
+                                 "and" (b earwig--one-target))
+  "A, MORE and B, each of them."
+  :contributes-to earwig-target
+  (earwig--target-make (append (list 'and t a) more (list b))))
+
+;; Where a command puts text: (KIND TARGET), KIND `before', `after',
+;; `under', `start' or `end'
+
+(phony-define-open-rule earwig-destination
+  "Where to put text: \"before TARGET\", \"under TARGET\", \"to the end of TARGET\".")
+
+(phony-defun earwig-destination-beside ((where (| "before" "after")) (target earwig--one-target))
+  "Before or after TARGET."
+  :contributes-to earwig-destination
+  (list (intern where) target))
+
+(phony-defun earwig-destination-under ((| "under" "as a subheading of" "as a sub heading of"
+                                          "as a sub item of" "as a subitem of" "as a sub-item of")
+                                       (target earwig--one-target))
+  "As the last child of TARGET, a heading or list item."
+  :contributes-to earwig-destination
+  (list 'under target))
+
+(phony-defun earwig-destination-edge ("to the" (edge (| "start" "beginning" "end")) "of"
+                                      (target earwig--one-target))
+  "At the start or end of TARGET."
+  :contributes-to earwig-destination
+  (list (if (equal edge "end") 'end 'start) target))
 
 ;;;; Reading what's said
 
@@ -536,7 +662,7 @@ Its targets must be there, and its rule's :check must pass."
            (let ((values (earwig--candidate-values candidate))
                  (check (get (earwig--candidate-rule candidate) 'earwig-check)))
              (cl-labels ((targets-ok (value)
-                           (cond ((earwig-target-p value) (earwig-target-range value) t)
+                           (cond ((earwig-target-p value) (earwig--ranges value) t)
                                  ((consp value) (and (targets-ok (car value))
                                                      (targets-ok (cdr value))))
                                  (t t))))

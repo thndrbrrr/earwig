@@ -1,9 +1,10 @@
-# Command grammar on phony.el (phase 1 built)
+# Command grammar on phony.el (phases 1 and 2 built)
 
-**Status:** phase 1 is built (earwig-grammar.el): all commands are Phony rules, found without "and
-then" and ranked over all readings, as below under "Built in phase 1". Phases 2 (the new targets
-and the commands taken from cursorfree) and 3 (hatty) are not built. The background below
-describes Earwig before phase 1.
+**Status:** phases 1 and 2 are built. Phase 1 (earwig-grammar.el): all commands are Phony rules,
+found without "and then" and ranked over all readings, as below under "Built in phase 1". Phase 2
+(earwig-edit.el, earwig-move.el): the new targets and the commands taken from cursorfree, as below
+under "Built in phase 2". Phase 3 (hatty) is not built. The background below describes Earwig
+before phase 1.
 
 Earwig matched its voice commands with regular expressions
 and resolved their targets with hand-written parsing. The idea is to define all commands,
@@ -522,11 +523,55 @@ workarounds should be easy to find and replace later.
   `earwig-parse-number`, rather than a provider of Phony's `number` interface. A provider without
   a module would take over `number` for all of the user's Phony rules.
 - **Breaking:** `earwig-extra-commands` is obsolete; Earwig warns once if it's set. The bare
-  commands "next heading", "next item" and "next bullet" stay until phase 2 makes "the next
+  commands "next heading", "next item" and "next bullet" stayed until phase 2 made "the next
   heading" a target. `earwig-when-regexp` became the dictionary `earwig-when`, and
   `earwig-part-range` takes an `earwig-part` value (or still a spoken string).
 - **Not done:** the better auto-stop from `phony-parser--wants` and dictionaries filled at
   runtime for names (buffers, headings).
+
+## Built in phase 2
+
+- **Targets** are layered, as Phony can't build a rule that refers to itself (its parsers are built
+  eagerly): `earwig--simple-target` (parts, words, A through B, WORDS in PART, the next WORDS), then
+  `earwig--one-target` (also the start or end of one of those, and every WORDS), then "A and B",
+  "both A and B" and "each of A … and B" of those. Parts under a heading ("the body of", "everything
+  under", "the subheadings of") take `earwig--heading`, a part that names a heading. Destinations are
+  the open rule `earwig-destination`.
+- **New `earwig-part`s:** "the UNIT with / containing WORDS", "the heading above", "the parent
+  heading", the body, everything under, the subheadings. So they work as scopes too: "replace cost
+  with price in the section with budget". UNIT gained heading (headline), section (subtree), item
+  (bullet) and link, so "this item", "the next heading", "last two sections" and "the link with
+  roadmap" come from the existing rules.
+- **Ranges:** a target resolves to a list of ranges, `(BEG END LINE-P REGEXP UNIT)`, in buffer
+  order (`earwig--ranges`). UNIT says how the text moves: a section with its levels, lines, a
+  paragraph, or text. Verbs act on several ranges from the last, in one undo step
+  (`earwig--one-undo-step`, a change group); "select" takes one only. `earwig-target-ranges` is
+  the public form; `earwig-target-range` signals for several.
+- **How the open points were settled:**
+  - Headings are counted by position at any level ("the next heading"); sections at the level of
+    the one point is in, not past its parent ("the next section"), so "swap this section with the
+    next section" swaps siblings. Items by position, at any level.
+  - "the next WORDS" starts after point and "the previous WORDS" ends before it, so after "go before
+    budget", "the next budget" is the one after.
+  - "A and B" of words is one target when "A and B" is in the buffer as words (that reading fails
+    its check); "both" and "each of" force several.
+  - "everything under" starts after Org's planning line and drawers, as the body does, so deleting
+    it keeps the schedule.
+  - "new paragraph before WORDS" in the middle of a paragraph splits it, with the new, empty
+    paragraph between; next to a paragraph, section or item it goes beside it.
+  - "unwrap" takes off quotes and brackets only; commas and dashes go when named ("remove the commas
+    around …"), and are found only right next to the target.
+  - "change every …" (dictating into several places) is left out.
+  - The bare commands "next heading", "next item" and "next bullet" are dropped (wording #25, #25a).
+  - "go to the start of line | sentence | paragraph" became "go to the start / end of TARGET",
+    reading the old phrases the same way. "go before / after" takes any target.
+- **"that"** is the region, else the text that went in last: `earwig--put` records what a command
+  put in, with the `earwig--last-dictation` of the time, so a later dictation is newer.
+- **Flash:** what a command put in flashes (`earwig-flash`, an overlay, so "where is every budget"
+  shows them all).
+- **Word matching:** an apostrophe between letters joins them, as an underscore does, but a quote
+  next to a space doesn't, so "unwrap go" finds `'go'` in text-mode, where `'` is a word character.
+- **Markdown:** headings are `#` lines outside code blocks, sections are separated by blank lines.
 
 ## Decide first
 
@@ -535,12 +580,7 @@ workarounds should be easy to find and replace later.
    - a fast-moving upstream
    - a breaking change to `earwig-extra-commands`
 
-### Decide when building
-
-- "change every …", dictating into several places at once: left out, or done some way without
-  multiple-cursors (phase 2).
-- Dropping the bare commands "next heading", "next item" and "next bullet" (wording #25, #25a),
-  with phase 2.
-
 Settled in phase 1 (see "Built in phase 1"): the ranking order, help, direct evaluation, numbers,
-and the migration note (the manual's "Commands of your own").
+and the migration note (the manual's "Commands of your own"). Settled in phase 2 (see "Built in
+phase 2"): "change every …" left out, and the bare "next heading", "next item" and "next bullet"
+dropped.
