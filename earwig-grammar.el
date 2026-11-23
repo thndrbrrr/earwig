@@ -271,40 +271,60 @@ says no number is ruled out."
 
 ;;;; Targets
 
-;; What an editing verb acts on.  Rules contributing to `earwig-part'
-;; name a part of the buffer; `earwig-target' is those, words to find in
-;; it, and targets made of others: "the end of TARGET", "every WORDS",
-;; "A and B".  Their values are `earwig-target' objects, which
+;; What an editing verb acts on.  `earwig-part' names a part of the
+;; buffer, `earwig-target' is those, words to find in it, and targets
+;; made of others: "the end of TARGET", "every WORDS", "A and B", "A
+;; through B".  Their values are `earwig-target' objects, which
 ;; `earwig-target-ranges' and `earwig-part-range' (earwig-edit.el) turn
 ;; into positions.
 ;;
-;; Phony can't parse a rule that refers to itself, so targets made of
-;; targets come in layers: `earwig--simple-target' (a part, words, A
-;; through B, WORDS in PART, the next WORDS), then `earwig--one-target'
-;; (also the start or end of one of those, and every WORDS), then
-;; "A and B" of those.  Parts under a heading take `earwig--heading', a
-;; part that names a heading.
+;; A part is a chain of selectors joined by "in" or "of", to any depth:
+;; "the first word of the second sentence in the paragraph with
+;; budget".  A selector is a unit with an optional quantity before it
+;; ("the second", "the last three", "every", "the third through fifth")
+;; and an optional filter after it ("with", "starting with", "ending
+;; with", "without" WORDS).  After a filter only "in" joins, as "of" is
+;; often part of the words.  Phony can't parse a rule that refers to
+;; itself, so the chain is a list, `earwig--link' repeated, which
+;; `earwig--fold-chain' makes into nested specs, each selector the scope
+;; of the one before it.  "the body of", "everything under" and "the
+;; subheadings of" are links too, taking the rest of the chain as their
+;; heading.  Words (WORDS, the next WORDS, A through B, every WORDS) can
+;; only come first, joined by "in".
 
 (cl-defstruct (earwig-target (:constructor earwig--target-make (spec))
                              (:copier nil))
   "What a voice command acts on.
 SPEC is one of these, where UNIT is a value of `earwig-unit', WORDS,
-A and B are words, and PART and TARGET other `earwig-target's:
-  parts of the buffer: (region), (that), (this UNIT), (last N UNIT),
-    (next N UNIT), (buffer), (with UNIT WORDS), (parent), (body
-    PART), (under PART), (subheadings PART), (within EDGE N UNIT PART),
-    (nth N FROM UNIT PART)
+A and B are words, and PART, SCOPE, TARGET, FIRST and LAST other
+`earwig-target's:
+  parts of the buffer: (units QUANTITY UNIT FILTER SCOPE), (region),
+    (that), (buffer), (parent), (body PART), (under PART),
+    (subheadings PART)
   words in it: (words WORDS), (through A B), (in TARGET PART), (every
     WORDS PART), (near DIRECTION WORDS)
-  made of others: (edge EDGE TARGET), (and FORCED TARGET...)
-DIRECTION is `next' or `previous', EDGE `start' or `end', or for
-`within' `first' or `last'; FROM is `start' or `end'.  FORCED
-non-nil means \"both\" or \"each of\" was said, so it's several
-targets even if \"A and B\" is in the buffer as words."
+  made of others: (edge EDGE TARGET), (span FIRST LAST), (and FORCED
+    TARGET...)
+For `units', QUANTITY picks among the UNITs FILTER lets through, in
+SCOPE, or nil for UNIT's natural container (earwig-edit.el): nil is
+the one with FILTER nearest point, (this) the one around point, (next
+N) and (previous N) those from point, (last N) those before point, or
+with FILTER or SCOPE the last N there, (range FROM TO) the FROMth
+through the TOth there, each (N . START-OR-END), and (every) all of
+them.  FILTER is nil or (KIND WORDS), KIND `with', `without',
+`starting' or `ending'.  DIRECTION is `next' or `previous', EDGE
+`start' or `end'.  FORCED non-nil means \"both\" or \"each of\" was
+said, so it's several targets even if \"A and B\" is in the buffer as
+words."
   spec)
 
-(phony-define-dictionary earwig-unit
-  "A unit of text, singular or plural; its value is the singular."
+(phony-define-open-rule earwig-part
+  "A part of the buffer, as \"this paragraph\" or \"the section with budget\".")
+
+(phony-define-open-rule earwig-target
+  "What an editing verb acts on: a part of the buffer, or words in it.")
+
+(defconst earwig--units
   '(("word" . "word") ("words" . "word")
     ("sentence" . "sentence") ("sentences" . "sentence")
     ("paragraph" . "paragraph") ("paragraphs" . "paragraph")
@@ -316,110 +336,162 @@ targets even if \"A and B\" is in the buffer as words."
     ("item" . "item") ("items" . "item") ("bullet" . "item") ("bullets" . "item")
     ("checkbox" . "checkbox") ("checkboxes" . "checkbox")
     ("check box" . "checkbox") ("check boxes" . "checkbox")
-    ("link" . "link") ("links" . "link")))
+    ("link" . "link") ("links" . "link"))
+  "Units as said, and the singular each is.  The plurals end in s.")
 
-(phony-define-open-rule earwig-part
-  "A part of the buffer, as \"this paragraph\" or \"the section with budget\".")
+(phony-define-dictionary earwig-unit
+  "A unit of text, singular or plural; its value is the singular."
+  earwig--units)
 
-(phony-define-open-rule earwig-target
-  "What an editing verb acts on: a part of the buffer, or words in it.")
+(phony-define-dictionary earwig--unit-said
+  "A unit as said: (UNIT . PLURAL), UNIT the singular, PLURAL non-nil
+for a plural."
+  (mapcar (pcase-lambda (`(,said . ,unit)) (cons said (cons unit (string-suffix-p "s" said))))
+          earwig--units))
+
+(defconst earwig--ordinal-words
+  '("first" "second" "third" "fourth" "fifth" "sixth" "seventh" "eighth" "ninth" "tenth"
+    "eleventh" "twelfth" "thirteenth" "fourteenth" "fifteenth" "sixteenth" "seventeenth"
+    "eighteenth" "nineteenth" "twentieth")
+  "Ordinals in words, from one on.")
+
+(phony-define-dictionary earwig--ordinal-word
+  "An ordinal in words, \"first\" to \"twentieth\"; its value is the number."
+  (cl-loop for word in earwig--ordinal-words for n from 1 collect (cons word n)))
+
+(phony-defun earwig--ordinal-digits ((word phony--builtin-word))
+  "An ordinal in digits, as \"21st\"; a reading where it's another word is ruled out."
+  :interactive nil
+  (if (string-match "\\`\\([0-9]+\\)\\(?:st\\|nd\\|rd\\|th\\)\\'" word)
+      (max 1 (string-to-number (match-string 1 word)))
+    (user-error "Not an ordinal: \"%s\"" word)))
+
+(put 'earwig--ordinal-digits 'earwig-free 'closed)
+
+(phony-defun earwig-ordinal ((| (seq (n (| earwig--ordinal-word earwig--ordinal-digits))
+                                     (? (from (| "to last" "from last" "from the end"))))
+                                (penultimate (| "next to last" "penultimate"))))
+  "An ordinal, as (N . FROM): FROM `start', or `end' for \"second to
+last\" and the like."
+  :interactive nil
+  (if penultimate '(2 . end) (cons n (if from 'end 'start))))
+
+(phony-define-dictionary earwig--determiner
+  "What can go before a unit: \"the\", \"this\", \"current\", and \"that\"
+or \"a\", often heard for \"the\"."
+  '(("the" . t) ("this" . t) ("that" . t) ("a" . t) ("current" . t) ("the current" . t)))
+
+(phony-defun earwig--quantity
+    ((| (seq (direction (| "next" "following" "previous" "preceding" "last"))
+             (? (count earwig-number)))
+        (seq "first" (first earwig-number))
+        (seq (from earwig-ordinal) (? (| "through" "thru") (? "the") (to earwig-ordinal)))
+        (every (| "every" "each" "all" "all the" "all of the"))))
+  "How many UNITs and which: see `earwig-target'."
+  :interactive nil
+  (cond (every '(every))
+        (from (list 'range from (or to from)))
+        (first (list 'range '(1 . start) (cons first 'start)))
+        (t (list (pcase direction
+                   ((or "next" "following") 'next)
+                   ((or "previous" "preceding") 'previous)
+                   (_ 'last))
+                 (or count 1)))))
+
+(phony-defun earwig--filter ((kind (| "with" "containing" "starting with" "ending with" "without"))
+                             (words earwig-words))
+  "Which UNITs count: those with, without, starting or ending with WORDS."
+  :interactive nil
+  (list (pcase kind
+          ("starting with" 'starting)
+          ("ending with" 'ending)
+          ("without" 'without)
+          (_ 'with))
+        words))
+
+(defun earwig--units-target (quantity unit filter)
+  "Return the target for UNIT, (UNIT . PLURAL), with QUANTITY and FILTER.
+Without a quantity, a plural is every one, a singular with a filter the
+nearest, and one without the one around point."
+  (earwig--target-make
+   (list 'units
+         (or quantity (cond ((cdr unit) '(every)) (filter nil) (t '(this))))
+         (car unit) filter nil)))
+
+(phony-defun earwig--selector ((? (_the earwig--determiner)) (? (quantity earwig--quantity))
+                               (unit earwig--unit-said))
+  "UNITs picked by QUANTITY: \"the second paragraph\", \"last two words\"."
+  :interactive nil
+  (earwig--units-target quantity unit nil))
+
+(phony-defun earwig--selector-filtered ((? (_the earwig--determiner))
+                                        (? (quantity earwig--quantity))
+                                        (unit earwig--unit-said) (filter earwig--filter))
+  "UNITs picked by QUANTITY among those FILTER lets through."
+  :interactive nil
+  (earwig--units-target quantity unit filter))
 
 (phony-defun earwig-part-region ((| "region" "the region" "selection" "the selection"))
   "The region, or evil's visual selection."
-  :contributes-to earwig-part
+  :interactive nil
   (earwig--target-make '(region)))
 
 (phony-defun earwig-part-that ((| "that" "this" "it"))
   "The region, or else the text that went in last, dictated or not."
-  :contributes-to earwig-part
+  :interactive nil
   (earwig--target-make '(that)))
-
-(phony-defun earwig-part-this ((? (| "this" "the" "current" "the current")) (unit earwig-unit))
-  "The UNIT around point."
-  :contributes-to earwig-part
-  (earwig--target-make (list 'this unit)))
-
-(phony-defun earwig-part-units ((? "the") (direction (| "last" "previous" "next" "first"))
-                                (? (count earwig-number)) (unit earwig-unit))
-  "The COUNT UNITs before or after point; \"first\" is \"next\"."
-  :contributes-to earwig-part
-  (earwig--target-make (list (if (member direction '("next" "first")) 'next 'last)
-                             (or count 1) unit)))
 
 (phony-defun earwig-part-buffer ((| (seq (? "the") (? (| "whole" "entire")) (| "buffer" "file"))
                                     "everything" "all"))
   "The whole buffer."
-  :contributes-to earwig-part
+  :interactive nil
   (earwig--target-make '(buffer)))
-
-(phony-defun earwig-part-with ((? (| "the" "this" "that" "a")) (unit earwig-unit)
-                               (| "with" "containing")
-                               (words earwig-words))
-  "The UNIT with WORDS in it; for a heading or section, in its title.
-\"this\", \"that\" or \"a\" can go for \"the\", as they're often heard for it."
-  :contributes-to earwig-part
-  (earwig--target-make (list 'with unit words)))
 
 (phony-defun earwig-part-parent ((? (| "the" "this")) "parent" (| "heading" "headline"))
   "The parent of the heading point is under."
-  :contributes-to earwig-part
+  :interactive nil
   (earwig--target-make '(parent)))
 
-(phony-defun earwig--heading ((heading (| earwig-part-this earwig-part-units earwig-part-parent
-                                          earwig-part-with)))
-  "A part that names a heading, as \"this heading\" or \"the section with budget\"."
+(phony-defun earwig-part-subheadings ((? (| "the" "this")) "subheadings")
+  "The subheadings of the heading point is under."
   :interactive nil
-  heading)
+  (earwig--target-make '(subheadings nil)))
 
-(phony-defun earwig-part-body ((? (| "the" "this")) (| "body of" "text under")
-                               (heading earwig--heading))
-  "The text of HEADING itself, without its subheadings, planning or drawers."
+(phony-defun earwig--link
+    ((| (seq (plain earwig--selector) (| "in" "of"))
+        (seq (filtered earwig--selector-filtered) "in")
+        (seq (? (| "the" "this")) (body (| "body of" "text under")))
+        (under "everything under")
+        (seq (? (| "the" "this")) (subheadings "subheadings of"))))
+  "A selector and the word that joins it to the next: \"the first word of\".
+\"the body of\", \"everything under\" and \"the subheadings of\" take
+the rest of the chain as their heading."
+  :interactive nil
+  (cond (plain plain)
+        (filtered filtered)
+        (body (earwig--target-make '(body nil)))
+        (under (earwig--target-make '(under nil)))
+        (subheadings (earwig--target-make '(subheadings nil)))))
+
+(defun earwig--fold-chain (links last)
+  "Return the target of LINKS, from `earwig--link', and LAST, each the
+scope of the one before."
+  (let ((scope last))
+    (dolist (link (reverse links) scope)
+      (let ((spec (copy-sequence (earwig-target-spec link))))
+        (if (eq (car spec) 'units)
+            (setf (nth 4 spec) scope)
+          (setf (nth 1 spec) scope))
+        (setq scope (earwig--target-make spec))))))
+
+(phony-defun earwig-part-chain ((links (* earwig--link))
+                                (last (| earwig--selector earwig--selector-filtered
+                                         earwig-part-region earwig-part-that earwig-part-buffer
+                                         earwig-part-parent earwig-part-subheadings)))
+  "A part of the buffer, each selector in the next: \"this paragraph\",
+\"the first word of the second sentence in the section with budget\"."
   :contributes-to earwig-part
-  (earwig--target-make (list 'body heading)))
-
-(phony-defun earwig-part-under ("everything under" (heading earwig--heading))
-  "HEADING's section without its heading line."
-  :contributes-to earwig-part
-  (earwig--target-make (list 'under heading)))
-
-(phony-defun earwig-part-subheadings ((? (| "the" "this")) "subheadings" (? "of" (heading earwig--heading)))
-  "The subheadings of HEADING, or of the heading point is under."
-  :contributes-to earwig-part
-  (earwig--target-make (list 'subheadings heading)))
-
-(phony-defun earwig-part-units-of ((? (| "the" "this")) (edge (| "first" "last"))
-                                   (? (count earwig-number)) (unit earwig-unit) (| "of" "in")
-                                   (part (| earwig-part-region earwig-part-that earwig-part-this
-                                            earwig-part-units earwig-part-buffer earwig-part-with
-                                            earwig-part-parent earwig-part-body earwig-part-under
-                                            earwig-part-subheadings)))
-  "The first or last COUNT UNITs of PART."
-  :contributes-to earwig-part
-  (earwig--target-make (list 'within (intern edge) (or count 1) unit part)))
-
-(phony-define-dictionary earwig-ordinal
-  "An ordinal from second on, as (N . FROM): FROM `start', or `end' for
-\"second to last\" and the like."
-  (let ((words '("second" "third" "fourth" "fifth" "sixth" "seventh" "eighth" "ninth" "tenth"))
-        (digits '("2nd" "3rd" "4th" "5th" "6th" "7th" "8th" "9th" "10th"))
-        entries)
-    (cl-loop for word in words for digit in digits for n from 2
-             do (dolist (spoken (list word digit))
-                  (push (cons spoken (cons n 'start)) entries)
-                  (dolist (end '(" to last" " from last" " from the end"))
-                    (push (cons (concat spoken end) (cons n 'end)) entries))))
-    (append '(("next to last" . (2 . end)) ("penultimate" . (2 . end)))
-            (nreverse entries))))
-
-(phony-defun earwig-part-ordinal ((? (| "the" "this")) (ordinal earwig-ordinal) (unit earwig-unit)
-                                  (| "of" "in")
-                                  (part (| earwig-part-region earwig-part-that earwig-part-this
-                                           earwig-part-units earwig-part-buffer earwig-part-with
-                                           earwig-part-parent earwig-part-body earwig-part-under
-                                           earwig-part-subheadings)))
-  "The second, third ... UNIT of PART, or the second to last and so on."
-  :contributes-to earwig-part
-  (earwig--target-make (list 'nth (car ordinal) (cdr ordinal) unit part)))
+  (earwig--fold-chain links last))
 
 (phony-defun earwig-target-part ((part earwig-part))
   "A part of the buffer."
@@ -484,8 +556,32 @@ target, like \"this\" or \"next\": \"wrap the word this in quotes\"."
   :contributes-to earwig-target
   (earwig--target-make (list 'every words part)))
 
+(defun earwig--span-target (first last)
+  "Return the target from FIRST to LAST, or the words FIRST through LAST."
+  (let ((a (earwig-target-spec first))
+        (b (earwig-target-spec last)))
+    (earwig--target-make (if (and (eq (car a) 'words) (eq (car b) 'words))
+                             (list 'through (cadr a) (cadr b))
+                           (list 'span first last)))))
+
+(phony-defun earwig-target-span ((first (| earwig--simple-target earwig-target-edge))
+                                 (| "through" "thru" "until")
+                                 (last (| earwig--simple-target earwig-target-edge)))
+  "From the start of FIRST to the end of LAST: \"the second sentence
+through the end of this paragraph\"."
+  :contributes-to earwig-target
+  (earwig--span-target first last))
+
+(phony-defun earwig-target-span-from ("from" (first (| earwig--simple-target earwig-target-edge))
+                                      (| "to" "through" "thru" "until")
+                                      (last (| earwig--simple-target earwig-target-edge)))
+  "From the start of FIRST to the end of LAST."
+  :contributes-to earwig-target
+  (earwig--span-target first last))
+
 (phony-defun earwig--one-target ((target (| earwig--simple-target earwig-target-edge
-                                            earwig-target-every)))
+                                            earwig-target-every earwig-target-span
+                                            earwig-target-span-from)))
   "A target that isn't several joined by \"and\"."
   :interactive nil
   target)

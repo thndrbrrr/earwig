@@ -252,7 +252,7 @@ Learned ones are saved to a temporary `custom-file'."
 
 (ert-deftest earwig-test-find-command ()
   (should (equal (earwig-find-command "Delete last two words.")
-                 `(earwig-say-edit delete ,(earwig-test-target '(last 2 "word")))))
+                 `(earwig-say-edit delete ,(earwig-test-target '(units (last 2) "word" nil nil)))))
   (should (equal (earwig-find-command "go to line forty two") '(earwig-say-goto-line 42)))
   (should (equal (earwig-find-command "go to line 42") '(earwig-say-goto-line 42)))
   (should (equal (earwig-find-command "What can I say?") '(earwig-say-help)))
@@ -289,7 +289,7 @@ Learned ones are saved to a temporary `custom-file'."
                  `(("Format bold results" earwig-say-format bold
                     ,(earwig-test-target '(words "results")))
                    ("select the last sentence" earwig-say-edit select
-                    ,(earwig-test-target '(last 1 "sentence")))
+                    ,(earwig-test-target '(units (last 1) "sentence" nil nil)))
                    ("cut that." earwig-say-edit cut ,(earwig-test-target '(that)))
                    ("go to bottom" earwig-say-bottom)
                    ("paste." earwig-say-paste))))
@@ -309,14 +309,14 @@ Learned ones are saved to a temporary `custom-file'."
   ;; Parts of the buffer before words, and a scope before more words
   (should (equal (earwig-find-commands "replace one with two in this paragraph")
                  `(("replace one with two in this paragraph" earwig-say-replace "one" "two"
-                    ,(earwig-test-target '(this "paragraph")) nil))))
+                    ,(earwig-test-target '(units (this) "paragraph" nil nil)) nil))))
   (should (equal (earwig-find-commands "meow in the last two sentences")
                  nil))
   (should (equal (cdar (earwig-find-commands "copy meow in the last two sentences"))
                  `(earwig-say-edit copy
                                    ,(earwig-test-target
                                      `(in ,(earwig-test-target '(words "meow"))
-                                          ,(earwig-test-target '(last 2 "sentence"))))))))
+                                          ,(earwig-test-target '(units (last 2) "sentence" nil nil))))))))
 
 (ert-deftest earwig-test-run-commands-by-buffer ()
   "Which reading runs depends on what's in the buffer then."
@@ -893,7 +893,8 @@ Who pays?
     (should (equal (earwig-test-region "First one. The sentence with however here. Last.|"
                                        #'text-mode "select the sentence with however")
                    "The sentence with however here."))
-    ;; The first or last of a part; "first" alone is "next"
+    ;; The first or last of a part; "first" alone counts from the start of
+    ;; this sentence, its natural container
     (should (equal (earwig-test-command "Who pays? Does the moat| need a lifeguard?" #'text-mode
                                         "delete the first word of this sentence")
                    "Who pays? The moat need a lifeguard?"))
@@ -1222,6 +1223,194 @@ Who pays?
     (should (equal (earwig-test-region "Budget: see [[https://x.org][the roadmap]] now.|" #'org-mode
                                        "select the link with roadmap")
                    "[[https://x.org][the roadmap]]"))))
+
+;;;; Composable targets
+
+(defconst earwig-test-chain "* Plans
+Some plans| here. The moonbase is near.
+
+Second para with moonbase. Another sentence here.
+
+Third para without it.
+- one first item
+  - sub item
+- two moonbase item
+** Budget review
+Numbers are in. Moonbase costs.
+** Timeline
+It is late.
+** Extras
+* Other
+See [[https://x.org/report.pdf][Annual report]] and [[https://y.org/plan][the plan]].
+"
+  "An Org buffer for the tests of composable targets.")
+
+(ert-deftest earwig-test-chain-grammar ()
+  "Selectors chain with \"in\" or \"of\" to any depth, each the scope of the one before."
+  (should (equal (earwig-find-command "delete the first word of the second sentence of this paragraph")
+                 `(earwig-say-edit
+                   delete
+                   ,(earwig-test-target
+                     `(units (range (1 . start) (1 . start)) "word" nil
+                             ,(earwig-test-target
+                               `(units (range (2 . start) (2 . start)) "sentence" nil
+                                       ,(earwig-test-target
+                                         '(units (this) "paragraph" nil nil)))))))))
+  ;; Ranges of units, not the words "the third" through "fifth words"
+  (should (equal (earwig-find-command "select the third through the fifth word")
+                 `(earwig-say-edit select ,(earwig-test-target
+                                            '(units (range (3 . start) (5 . start)) "word" nil nil)))))
+  ;; A filter, then a scope; plurals are every one; ordinals in digits
+  (should (equal (earwig-find-command "select the sentence with moonbase in the 21st paragraph")
+                 `(earwig-say-edit select
+                                   ,(earwig-test-target
+                                     `(units nil "sentence" (with "moonbase")
+                                             ,(earwig-test-target
+                                               '(units (range (21 . start) (21 . start))
+                                                       "paragraph" nil nil)))))))
+  (should (equal (earwig-find-command "delete the paragraphs without moonbase")
+                 `(earwig-say-edit delete ,(earwig-test-target
+                                            '(units (every) "paragraph" (without "moonbase") nil)))))
+  ;; The body of a heading in a chain
+  (should (equal (earwig-find-command "select the first sentence of the body of the heading with budget")
+                 `(earwig-say-edit select
+                                   ,(earwig-test-target
+                                     `(units (range (1 . start) (1 . start)) "sentence" nil
+                                             ,(earwig-test-target
+                                               `(body ,(earwig-test-target
+                                                        '(units nil "heading" (with "budget") nil))))))))))
+
+(ert-deftest earwig-test-natural-containers ()
+  "Without a scope, a unit is counted in its natural container; a filter widens it."
+  (let ((sentence-end-double-space nil)
+        (org earwig-test-chain))
+    ;; A word in its sentence, a sentence in its paragraph, a paragraph in the heading's text
+    (should (equal (earwig-test-region org #'org-mode "select the second word") "plans"))
+    (should (equal (earwig-test-region org #'org-mode "select the first sentence") "Some plans here."))
+    (should (equal (earwig-test-region org #'org-mode "select the second paragraph")
+                   "Second para with moonbase. Another sentence here."))
+    ;; A list is one paragraph, an item's own text one for its sentences
+    (should (equal (earwig-test-region org #'org-mode "select the fourth paragraph")
+                   "- one first item\n  - sub item\n- two moonbase item"))
+    ;; Siblings for ordinals: Extras is the third under Plans
+    (should (equal (earwig-test-region org #'org-mode "select the third heading of the section with plans")
+                   "Extras"))
+    (should (equal (earwig-test-region org #'org-mode "select the second item of the section with plans")
+                   "- two moonbase item"))
+    ;; Filter first, then count, widening from the paragraph to the heading's text
+    (should (equal (earwig-test-region org #'org-mode "select the second sentence with moonbase")
+                   "Second para with moonbase."))
+    (should (equal (earwig-test-region org #'org-mode "select the first sentence with moonbase")
+                   "The moonbase is near."))
+    ;; "last" alone is before point; with a filter or scope, from the end
+    (should (equal (earwig-test-region org #'org-mode "select the last two words") "Some plans"))
+    (should (equal (earwig-test-region org #'org-mode "select the last sentence of the second paragraph")
+                   "Another sentence here."))
+    (should (equal (earwig-test-region org #'org-mode
+                                       "select the second to last sentence with moonbase in the section with plans")
+                   "two moonbase item"))
+    ;; Reversed ranges are swapped
+    (should (equal (earwig-test-region "One two three four five six.|" #'text-mode
+                                       "select the fifth through third words")
+                   "three four five"))))
+
+(ert-deftest earwig-test-chain-targets ()
+  (let ((sentence-end-double-space nil)
+        (org earwig-test-chain))
+    (should (equal (earwig-test-region org #'org-mode
+                                       "select the sentence with moonbase in the second paragraph")
+                   "Second para with moonbase."))
+    (should (equal (earwig-test-region org #'org-mode
+                                       "select the first word of the second sentence of the second paragraph")
+                   "Another"))
+    (should (equal (earwig-test-region org #'org-mode
+                                       "select moonbase in the first sentence of the second paragraph")
+                   "moonbase"))
+    (should (equal (earwig-test-region org #'org-mode
+                                       "select the first sentence of the body of the heading with budget")
+                   "Numbers are in."))
+    (should (equal (earwig-test-region org #'org-mode
+                                       "select everything under the second heading of this section")
+                   "It is late."))
+    ;; A plural scope is each of its parts, skipping those with too few
+    (should (equal (earwig-test-command "One a. Two b.\n\nThree c.\n\nFour d. Five e.|" #'text-mode
+                                        "uppercase the second sentence of every paragraph")
+                   "One a. TWO B.\n\nThree c.\n\nFour d. FIVE E."))
+    ;; An item's own text, not its sub-items
+    (should (equal (earwig-test-command "- one a\n  - two b\n- three c|\n" #'org-mode
+                                        "uppercase the first word of every item")
+                   "- ONE a\n  - TWO b\n- THREE c\n"))
+    ;; "this" in a scope only if point is there; "next" from point in it
+    (should-not (earwig-test-region org #'org-mode "select this sentence in the second paragraph"))
+    (should (equal (earwig-test-region org #'org-mode "select the next sentence in the second paragraph")
+                   "Second para with moonbase."))
+    ;; From one target to another
+    (should (equal (earwig-test-region org #'org-mode
+                                       "select the second sentence through the end of the second paragraph")
+                   "The moonbase is near.\n\nSecond para with moonbase. Another sentence here."))
+    ;; Overlapping parts are one
+    (should (equal (earwig-test-command "one two three|" #'text-mode
+                                        "delete the first two words and the second word")
+                   "three"))))
+
+(ert-deftest earwig-test-filters ()
+  (let ((sentence-end-double-space nil)
+        (org earwig-test-chain))
+    (should (equal (earwig-test-region org #'org-mode "select the sentence ending with near")
+                   "The moonbase is near."))
+    (should (equal (earwig-test-region org #'org-mode "select the sentence starting with another")
+                   "Another sentence here."))
+    ;; Parts of words for the unit "word", whole words for others
+    (should (equal (earwig-test-region org #'org-mode "select the word starting with moon") "moonbase"))
+    (should (equal (earwig-test-region org #'org-mode "select the word containing oonb") "moonbase"))
+    (should-not (earwig-test-region org #'org-mode "select the sentence starting with moon"))
+    ;; Without, and every one with a filter
+    (should (equal (error-message-string
+                    (should-error (earwig-test-buffer org #'org-mode
+                                    (earwig-cmd-edit 'select (earwig-test-target
+                                                              '(units nil "sentence" (with "zebras") nil))))
+                                  :type 'user-error))
+                   "No sentence with \"zebras\" here"))
+    (should (equal (earwig-test-region org #'org-mode "select the paragraph without moonbase")
+                   "Third para without it."))
+    (should (equal (earwig-test-command "A moon. B. C moon.|" #'text-mode
+                                        "delete every sentence without moon")
+                   "A moon. C moon."))
+    ;; Several with gaps between: the verb acts on each, select can't
+    (should (equal (earwig-test-command "A moon. B. C moon. D moon.|" #'text-mode
+                                        "uppercase the first through second sentences with moon")
+                   "A MOON. B. C MOON. D moon."))
+    (should-not (earwig-test-region "A moon. B. C moon.|" #'text-mode
+                                    "select the first through second sentences with moon"))
+    ;; Links by their visible text or URL, headings by their title
+    (should (equal (earwig-test-region org #'org-mode "select the link ending with pdf")
+                   "[[https://x.org/report.pdf][Annual report]]"))
+    (should (equal (earwig-test-region org #'org-mode "select the link starting with the")
+                   "[[https://y.org/plan][the plan]]"))
+    (should (equal (earwig-test-region org #'org-mode "select the heading ending with review")
+                   "Budget review"))))
+
+(ert-deftest earwig-test-replace-targets ()
+  "\"replace\" takes any target, whose text the new words replace."
+  (let ((sentence-end-double-space nil))
+    (should (equal (earwig-test-command "One two three.|" #'text-mode "replace the second word with moon")
+                   "One moon three."))
+    (should (equal (earwig-test-command "Hello there. All done.|" #'text-mode
+                                        "replace the second sentence with see you then")
+                   "Hello there. See you then."))
+    (should (equal (earwig-test-command "A moonbase.\n\nB moonbase and moonbase.|" #'text-mode
+                                        "replace moonbase in the second paragraph with base")
+                   "A moonbase.\n\nB base and base."))
+    ;; A bullet stays, and sub-items
+    (should (equal (earwig-test-command "- milk\n- Brian owns it\n  - sub\n- eggs|\n" #'org-mode
+                                        "replace the item with brian with Igor owns the thunder")
+                   "- milk\n- Igor owns the thunder\n  - sub\n- eggs\n"))
+    ;; "the word" is words, even one that's a target
+    (should (equal (earwig-test-command "Say this now.|" #'text-mode "replace the word this with that")
+                   "Say that now."))
+    ;; The words "that" without a region, as before
+    (should (equal (earwig-test-command "Not that one.|" #'text-mode "replace that with this")
+                   "Not this one."))))
 
 ;;;; Headings, lists and joins
 

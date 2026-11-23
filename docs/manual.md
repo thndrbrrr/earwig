@@ -189,44 +189,62 @@ Every verb works on every target: "select last two words", "delete that", "capit
 |---------------------------------------------------------|----------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------|
 | nothing, region, selection                              | "uppercase", "cut the selection"                                           | the region or evil's visual selection; "select" alone needs one                                          |
 | that, this, it                                          | "delete that"                                                              | the region, or else the text that went in last: your last dictation, or what a command put in after it  |
-| [this, the, current] UNIT                               | "select this sentence", "title case this heading"                          | the unit around point                                                                                    |
-| last, previous, next, first [N] UNITs                   | "delete last three words", "copy next line", "select the previous heading" | before or after point; N as a word or digits; "first" is "next"                                          |
-| the first / last [N] UNITs of / in TARGET               | "delete the first word of this sentence", "the last two words of the paragraph with budget" | those of TARGET, one of the parts of the buffer in these tables                          |
-| the second, third … tenth UNIT of / in TARGET           | "select the second sentence in the paragraph with moonbase", "the 3rd item of this section" | the one that far into TARGET                                                       |
-| the second to last, next to last, third to last … UNIT of / in TARGET | "select the second to last item of the section with tasks" | the one that far from TARGET's end; "from last" and "from the end" too                          |
-| the UNIT with / containing WORDS                        | "select the paragraph with budget", "delete the item containing milk"      | the nearest UNIT with those words in it; for a heading or section, in its title. "this", "that" or "a", often heard for "the", work too |
+| [QUANTITY] UNIT [FILTER]                                | "select this sentence", "delete last three words", "the second paragraph with budget" | units of the buffer, see [Units, quantities and filters](#units-quantities-and-filters) below |
+| PART in / of PART                                       | "the first word of the second sentence in the paragraph with moonbase"     | a part counted inside another, to any depth                                                              |
 | the [whole] buffer or file, everything, all             | "copy everything"                                                          | the whole buffer                                                                                         |
 | A through B, A until B, from A to / until / through B   | "cut because through Friday", "copy from however until shown"              | from the nearest A that has a B after it to the end of the first such B                                  |
+| TARGET through TARGET, from TARGET to TARGET            | "select the second sentence through the end of this paragraph"             | from the start of the first to the end of the second, whichever comes first in the buffer               |
 | any other words                                         | "capitalize emacs lisp"                                                    | the nearest place those words appear                                                                     |
 | the word / the words WORDS                              | "wrap the word this in single quotes"                                      | the same, for words that mean something else here, like "this", "that", "next" or "everything"           |
 | the next / following / previous / preceding WORDS       | "select the next budget"                                                   | the nearest after or before point                                                                        |
-| WORDS in TARGET                                         | "delete very in this paragraph", "format italic meow in the last two sentences" | every place WORDS are inside TARGET, one of the parts of the buffer above; for a command that acts on one place ("select", "go", "rewrite"), the nearest. A through B or the next WORDS in TARGET is the nearest |
-| every / each WORDS [in TARGET]                          | "format bold every deadline in this section"                               | all of them                                                                                              |
+| WORDS in PART                                           | "delete very in this paragraph", "format italic meow in the last two sentences" | every place WORDS are inside PART; for a command that acts on one place ("select", "go", "rewrite"), the nearest. A through B or the next WORDS in PART is the nearest |
+| every / each WORDS [in PART]                            | "format bold every deadline in this section"                               | all of them                                                                                              |
 | the start / beginning / end of TARGET                   | "go to the end of the paragraph with budget"                               | the place right before or after it                                                                       |
 | A and B                                                 | "delete very and really"                                                   | both, where "A and B" isn't in the buffer as words: "salt and pepper" stays one target if it's there     |
-| both A and B, each of A B and C                         | "capitalize each of Monday Tuesday and Friday"                             | several, even where "A and B" is in the buffer                                                           |
+| both A and B, each of A B and C                         | "capitalize each of Monday Tuesday and Friday"                             | several, even where "A and B" is in the buffer; parts of them that overlap are one                       |
 
-In Org and Markdown, headings and lists are targets too:
+PART is any of these that names a part of the buffer, not words. In Org and Markdown, headings are parts too:
 
 | Target                                                  | Example                                             | Means                                                                                                        |
 |---------------------------------------------------------|-----------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
 | this heading, this headline                             | "title case this heading"                           | its title, without stars, TODO keyword, priority or tags                                                     |
 | this section, this subtree                              | "move this section after the section with timeline" | the heading with everything under it                                                                         |
-| the body of HEADING, the text under HEADING             | "select the body of this heading"                   | its own text: after the heading line and Org's planning line (SCHEDULED, DEADLINE) and drawers, up to its first subheading |
-| everything under HEADING                                | "delete everything under the heading with draft"    | its own text and its subheadings                                                                             |
-| the subheadings [of HEADING]                            | "copy the subheadings of the heading with plans"    | its subheadings, with theirs                                                                                 |
+| the body of PART, the text under PART                   | "select the first sentence of the body of the heading with budget" | its own text: after the heading line and Org's planning line (SCHEDULED, DEADLINE) and drawers, up to its first subheading |
+| everything under PART                                   | "delete everything under the heading with draft"    | its own text and its subheadings                                                                             |
+| the subheadings [of PART]                               | "copy the subheadings of the heading with plans"    | its subheadings, with theirs                                                                                 |
 | the parent heading, the parent headline                 | "uppercase the parent heading"                      | one level up                                                                                                 |
-| the previous / next heading, last / next N headings     | "select the next heading"                           | by position, at any level                                                                                    |
-| the previous / next section, last / next N sections     | "swap this section with the next section"           | at the level of the one you're in                                                                            |
-| this item, this bullet, the item with WORDS             | "move the item with milk after the item with bread" | a list item with its sub-items; in any buffer                                                                |
-| this checkbox, the checkbox with WORDS, the next checkbox | "move the checkbox with pet the cat under the item with feed the cat" | the same, but only items with a checkbox; items and checkboxes move under each other either way, indented |
-| this link, the link with WORDS, the next link           | "open the link with roadmap"                        | an Org link, a Markdown link, or a URL; in any buffer                                                        |
 
-HEADING is any of these that names a heading: "this heading", "the section with budget", "the parent heading", "the next heading".
+The PART of these names a heading or section: "this heading", "the section with budget", "the parent heading", "the second heading of this section".
 
-- **UNIT** is word, sentence, paragraph, line, heading (or headline), section (or subtree), item (or bullet), checkbox (an item with one) or link. A deleted or cut line, item or section takes its newline with it. "last word" leaves the punctuation after the word alone. The sentence the cursor is inside isn't the last or the next one: in `One. Two| three. Four.` "last sentence" (or "previous") is `One.` and "next sentence" is `Four.`. Right after a sentence, or just before its period, it's the last one. In evil's normal state the character under the cursor counts as before point.
+#### Units, quantities and filters
+
+A part of the buffer is a UNIT, with a QUANTITY before it and a FILTER after it, both optional: "the third through fifth words", "every item without a date", "the last sentence ending with Friday". Parts nest with "in" or "of" to any depth, each counted inside the next: "the first word of every item", "the sentence with moonbase in the second paragraph of the section with plans". After a filter only "in" joins, as "of" is often one of the words.
+
+- **UNIT** is word, sentence, paragraph, line, heading (or headline), section (or subtree), item (or bullet), checkbox (an item with one) or link; singular or plural. Headings and sections are Org's and Markdown's; items (a list item with its sub-items) and links (an Org link, a Markdown link or a URL) are found in any buffer. Items and checkboxes move under each other either way, indented. A paragraph is lines of text between blank lines; a list is one, as is a heading's title. A deleted or cut line, item, section or paragraph of whole lines takes its newline with it.
+- **QUANTITY**:
+
+  | Quantity | Example | Means |
+  |----------|---------|-------|
+  | (none), this, the, current | "select this sentence" | the one around point |
+  | (none), with a filter | "select the paragraph with budget" | the nearest one the filter lets through, in the window first, then in the whole buffer; for a plural, every one ("delete the paragraphs with budget") |
+  | next / following, previous / preceding [N] | "copy next line", "select the next sentence with budget", "swap this section with the next section" | after or before point: headings and items at any level, sections at the level of the one you're in; inside a part, from point there |
+  | last [N] | "delete last three words" | before point, the most common correction while dictating. With a filter or a part it counts from the end there instead: "the last sentence of this paragraph", "the last item with milk" |
+  | first [N], second, third … twentieth, 21st, 42nd … | "capitalize the third word", "the first two items of this list" | counted from the start of where it counts, see below. "the first word" is the first of this sentence, not the next word |
+  | second to last, next to last, penultimate, third from last, third from the end … | "select the second to last item of the section with tasks" | counted from the end |
+  | ORDINAL through ORDINAL | "select the third through fifth words", "the second through the fourth paragraph" | from one to the other, either way round |
+  | every, each, all [the] | "uppercase every heading in this section", "all paragraphs" | all of them; "all" alone is the whole buffer |
+
+  N is a number in words or digits: "last three words", "the first 2 items".
+- **FILTER** is with or containing, without, starting with, or ending with WORDS. The filter goes first, then the count: "the second paragraph with budget" is the second of the paragraphs with budget. Words match a word unit in part ("the word starting with moon" and "the word containing oon" find `moonbase`) and other units as whole words. A heading or section matches by its title; a link by its visible text or its URL ("the link ending with pdf").
+- **Where they count.** Without a part, a unit counts in its natural container: a word in its sentence, a sentence or line in its paragraph (a list item's own text and a heading's title are paragraphs for this), an item or checkbox in its list, a heading or section in its parent's section (at the top, the buffer), a paragraph or link in the heading's own text, or the buffer where there are no headings. "Capitalize the third word" is the third word of this sentence. When a filter finds too few there, it looks further out, up to the buffer: from the paragraph to the heading's own text, its section, the sections around that, and the buffer. A part that's said is where it counts, without going further. Headings, sections, items and checkboxes are counted among their siblings: under "Plans" with A, B (B.1, B.2) and C, "the third heading" is C. With a filter, or "every", or "next" and "previous", they count at any level.
+- **Several parts.** "the first sentence of every paragraph" is one sentence per paragraph, skipping paragraphs with too few. Units next to each other are one target ("the third through fifth words"); with a filter they're separate ones, which "delete" and the other verbs act on each of, and "select" can't take. An item counts its own text, not its sub-items: "the first word of every item" counts each item once.
+- **"this" and "next" inside a part:** "this sentence in the second paragraph" works only if the cursor is in that paragraph, and "the next sentence in the second paragraph" is the first one after the cursor there.
+- **Last and next sentences.** The sentence the cursor is inside isn't the last or the next one: in `One. Two| three. Four.` "last sentence" (or "previous") is `One.` and "next sentence" is `Four.`. Right after a sentence, or just before its period, it's the last one. "last word" leaves the punctuation after the word alone. In evil's normal state the character under the cursor counts as before point.
+
+More about targets:
+
 - **Words are found** ignoring case and the punctuation between them, so "end of file" also finds "end-of-file". Markup doesn't get in the way: "heading" is found in `_Some underlined heading_`, and "last word" there is `heading` without the underscore. An underscore or apostrophe between letters joins them, so `foo_bar` and `don't` are one word each, but `'go'` is the word `go` in quotes. The nearest is looked for in the window first, then in the whole buffer: one around point wins, then the closest before point, then the closest after.
-- **"in"** only scopes when what follows names a part of the buffer; otherwise it's one of the words: "select log in screen".
+- **"in"** only scopes when what follows names a part of the buffer; otherwise it's one of the words: "select log in screen". Where both read, as in "the sentence with sign in the second paragraph", the reading with fewer words to find is tried first, and the buffer settles it.
 - **Several places,** as "every" and "and" give, are acted on together, in one undo step; cut or copied, they go into the kill ring together. "select" takes only one.
 - **"next one", "previous one"** (or "next match") move a word target on to the next or previous place it appears, after "select WORDS" or "go before/after WORDS".
 
@@ -310,13 +328,16 @@ When a pause split a sentence in two, mend it without leaving dictation: say "ok
 | Say                         | Replaces                                                                     |
 |-----------------------------|------------------------------------------------------------------------------|
 | replace A with B            | the nearest A                                                                |
-| replace the next / previous A with B | the nearest A after or before point (in TARGET, if one follows)     |
-| replace every A with B      | every A in the buffer, or in TARGET: "replace every shark in this section with dolphin" |
-| replace A with B in TARGET  | every A in TARGET: "in this paragraph", "in the last three lines", "in that" |
+| replace the next / previous A with B | the nearest A after or before point (in PART, if one follows)       |
+| replace every A with B      | every A in the buffer, or in PART: "replace every shark in this section with dolphin" |
+| replace A with B in PART    | every A in PART: "in this paragraph", "in the last three lines", "in that"   |
+| replace A in PART with B    | the same: "replace moonbase in the second paragraph with base"               |
 | replace A with B everywhere | every A in the buffer                                                        |
-| replace that with B         | the region itself, if there is one                                           |
+| replace that with B         | the region itself, if there is one; otherwise the word "that"                |
+| replace the word A with B   | the words A, even ones that mean something else in a target                  |
+| replace PART with B         | the text of PART: "replace the second word with moon", "replace the last sentence with see you then" |
 
-B takes A's capital ("Monday" → "Tuesday" at a sentence start), but the capital of "I", an acronym or a name only at a sentence start: "replace I with we" gives "we" mid-sentence. TARGET is a part of the buffer from the table above, not words. A and B may themselves contain "with".
+B takes A's capital ("Monday" → "Tuesday" at a sentence start), but the capital of "I", an acronym or a name only at a sentence start: "replace I with we" gives "we" mid-sentence. Replacing a part whose text ends in a period, question or exclamation mark keeps it, unless B has its own. PART is a part of the buffer from the tables above, not words. A and B may themselves contain "with": "replace the sentence with budget with we have no money" tries each way of splitting until one finds something to replace.
 
 ### Moving, copying and wrapping
 
@@ -496,8 +517,9 @@ Rules of Earwig's to use in your patterns:
 - `earwig-text` – Any words, as for a search or a name. They can't be checked, so they run to the end of what's said, or to "and then".
 - `earwig-words` – Words to find in the buffer. Earwig prefers a reading where they're there.
 - `earwig-number` – A number, in digits or words, see `earwig-parse-number` below. Its value is the number; a reading where it isn't one is only chosen to say so.
-- `earwig-part` – A part of the buffer, named as the editing commands' targets are: "last two sentences", "this paragraph", "that", "the whole buffer". `earwig-part-range` makes it `(BEG . END)`.
-- `earwig-target` – What an editing verb acts on: a part, or words to find, "A through B", "WORDS in PART", "every WORDS", "A and B", "the end of TARGET". `earwig-target-ranges` makes it a list of `(BEG . END)`, and signals a `user-error` if it isn't there; `earwig-target-range` gives the one `(BEG . END)`, and signals one if it's several places too.
+- `earwig-part` – A part of the buffer, named as the editing commands' targets are: "last two sentences", "this paragraph", "that", "the whole buffer", "the second sentence of the paragraph with budget". `earwig-part-range` makes it `(BEG . END)`.
+- `earwig-unit` – A unit, singular or plural, as "paragraphs"; its value is the singular, `"paragraph"`. `earwig-ordinal` is an ordinal, "second" or "21st" or "third to last", as `(N . FROM)`, FROM `start` or `end`.
+- `earwig-target` – What an editing verb acts on: a part, or words to find, "A through B", "WORDS in PART", "every WORDS", "A and B", "the end of TARGET", "TARGET through TARGET". `earwig-target-ranges` makes it a list of `(BEG . END)`, and signals a `user-error` if it isn't there; `earwig-target-range` gives the one `(BEG . END)`, and signals one if it's several places too.
 - `earwig-destination` – Where to put something: "before TARGET", "after TARGET", "under TARGET", "to the start of TARGET", "to the end of TARGET". Its value is `(KIND TARGET)`, KIND `before`, `after`, `under`, `start` or `end`.
 - `earwig-when` – A spoken date ("today", "tomorrow", "next week", "next month", "on Friday"); its value is what was said, which `earwig-spoken-time` makes a time, as "schedule" does. They're in `earwig-org.el`, as `earwig-spoken-time` uses Org's date reading.
 
