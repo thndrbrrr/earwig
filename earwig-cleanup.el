@@ -841,6 +841,12 @@ Returns TEXT without text properties."
           (setq text (concat text " ")))
         (substring-no-properties text)))))
 
+(defun earwig-heard-words-p (text)
+  "Non-nil if the transcription TEXT has a letter or digit in it.
+Speech models can write a dash or a dot for silence; spoken punctuation
+comes as words, as \"dash\", so it isn't lost."
+  (string-match-p "[[:alnum:]]" text))
+
 (defun earwig-clean (text)
   "Return TEXT without filler words and with the corrections applied.
 The part of the cleanup that doesn't depend on where TEXT goes, so it

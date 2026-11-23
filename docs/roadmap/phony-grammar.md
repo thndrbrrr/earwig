@@ -537,8 +537,7 @@ workarounds should be easy to find and replace later.
   "both A and B" and "each of A … and B" of those. Parts under a heading ("the body of", "everything
   under", "the subheadings of") take `earwig--heading`, a part that names a heading. Destinations are
   the open rule `earwig-destination`.
-- **New `earwig-part`s:** "the UNIT with / containing WORDS", "the heading above", "the parent
-  heading", the body, everything under, the subheadings. So they work as scopes too: "replace cost
+- **New `earwig-part`s:** "the UNIT with / containing WORDS", "the parent heading", the body, everything under, the subheadings. So they work as scopes too: "replace cost
   with price in the section with budget". UNIT gained heading (headline), section (subtree), item
   (bullet) and link, so "this item", "the next heading", "last two sections" and "the link with
   roadmap" come from the existing rules.
@@ -568,7 +567,38 @@ workarounds should be easy to find and replace later.
 - **"that"** is the region, else the text that went in last: `earwig--put` records what a command
   put in, with the `earwig--last-dictation` of the time, so a later dictation is newer.
 - **Flash:** what a command put in flashes (`earwig-flash`, an overlay, so "where is every budget"
-  shows them all).
+  shows them all), for `earwig-flash-duration` seconds (1.5).
+- **After the phase 2 review** (tmp/demo/phase2-test-plan.md):
+  - "WORDS in PART" is every place WORDS are in PART, as "replace A with B in PART" already was;
+    commands that act on one place take the nearest (`earwig--choose`).
+  - "the parent heading | headline" replaced "the heading above", which sounded like the previous
+    heading.
+  - "this", "that" and "a" go for "the" in "the UNIT with WORDS" (and "this" in the body, the
+    subheadings, the start / end of), as the speech model often hears them for it.
+  - "the word(s) WORDS" is words, even ones a target reserves: "wrap the word this in quotes".
+  - "the first / last [N] UNITs of PART" (`(within EDGE N UNIT PART)`), and "first" as "next".
+  - "replace the next / previous / every A with B"; "format TARGET STYLE"; "wrap … into PAIR";
+    more PAIR words ("parenthesis", singulars).
+  - "new item under HEADING" goes on with the list its text ends with, or starts one.
+  - Deleting the start of a sentence takes punctuation left there and passes on its capital
+    (`earwig--tidy-sentence-start`); not for "rewrite", where dictation takes its place.
+  - A transcription without letters or digits, as a dash the model writes for silence, is
+    nothing heard (`earwig-heard-words-p`).
+- **After the second review** (tmp/demo/phase2-test-plan-amendments.md):
+  - The sentence point is inside is neither the last nor the next one (it was the last); right
+    after one, or just before its period, it's still the last. So "moonbase in last sentence"
+    from mid-sentence is the sentence before.
+  - "the second … tenth [to last] UNIT of PART" (`(nth N FROM UNIT PART)`, the dictionary
+    `earwig-ordinal`), "next to last", "penultimate".
+  - "to" / "into" DEST is "under" (`earwig-destination-into`), with a simple target so "to the
+    end of" keeps its meaning. A region of whole lines is lines (items if it starts at one), so
+    "select the first two items … move that to …" moves items; the numbered list left behind is
+    repaired.
+  - "new item" never copies a checkbox; only "new checkbox" makes one.
+- **After the third review:** "checkbox" is a UNIT, an item with one (`earwig--items-of`), so
+  "the checkbox with WORDS", "this checkbox" and "the next checkbox" are targets, and items and
+  checkboxes move under each other. "new sub checkbox" is a structure phrase, and "new checkbox
+  before / after / under TARGET" makes one; under an item, a sub-item.
 - **Word matching:** an apostrophe between letters joins them, as an underscore does, but a quote
   next to a space doesn't, so "unwrap go" finds `'go'` in text-mode, where `'` is a word character.
 - **Markdown:** headings are `#` lines outside code blocks, sections are separated by blank lines.

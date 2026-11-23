@@ -34,8 +34,9 @@
 ;;                               line ("new list", "start a list" too)
 ;;   new sub item [TEXT]         an item one level deeper
 ;;   new checkbox [TEXT]         an item with a "[ ] " checkbox
-;; A numbered list goes on numbering, and an item gets a checkbox when the
-;; one before has one.  TEXT goes there, with a capital: "new heading
+;;   new sub checkbox [TEXT]     a checkbox one level deeper
+;; A numbered list goes on numbering; only "new checkbox" makes a
+;; checkbox, even in a list of them.  TEXT goes there, with a capital: "new heading
 ;; introduction".  In Org these use Org's own commands, so the blank lines
 ;; and numbering follow Org's settings; in Markdown they work on # headings
 ;; outside code blocks and on -, +, * and numbered lists.
@@ -79,7 +80,6 @@
 (declare-function org-insert-item "org-list" (&optional checkbox))
 (declare-function org-in-item-p "org-list" ())
 (declare-function org-indent-item "org-list" ())
-(declare-function org-at-item-checkbox-p "org-list" ())
 (declare-function markdown-code-block-at-pos "markdown-mode" (pos))
 (declare-function evil-insert-state "evil-states" (&optional arg))
 
@@ -94,7 +94,8 @@ See the commentary of earwig-structure.el."
     (subheading "new subheading" "new sub heading" "new sub-heading")
     (item "new item" "new bullet" "new list" "start a list")
     (sub-item "new sub item" "new subitem" "new sub-item" "new sub bullet")
-    (checkbox "new checkbox" "new check box"))
+    (checkbox "new checkbox" "new check box")
+    (sub-checkbox "new sub checkbox" "new subcheckbox" "new sub-checkbox" "new sub check box"))
   "Structure phrases, in dictation and as commands, as (ACTION PHRASE...).")
 
 (defvar earwig--open-structure nil
@@ -184,19 +185,20 @@ Without a heading above, a level 1 heading after the current line."
   "Make the next Markdown list item for ACTION, or start a list."
   (let ((start (earwig--md-item-start)))
     (if (not start)
-        (earwig--start-list (eq action 'checkbox))
+        (earwig--start-list (memq action '(checkbox sub-checkbox)))
       (goto-char start)
       (looking-at earwig--md-item-regexp)
       (let ((indent (match-string 1))
             (bullet (match-string 2))
             (number (match-string 3))
             (delim (match-string 4))
-            (checkbox (or (eq action 'checkbox) (match-beginning 5)))
+            (checkbox (memq action '(checkbox sub-checkbox)))
+            (sub (memq action '(sub-item sub-checkbox)))
             (content (- (or (match-beginning 5) (match-end 0)) (match-beginning 0))))
         (goto-char (earwig--md-item-end start))
         (insert "\n"
-                (if (eq action 'sub-item) (make-string content ?\s) indent)
-                (cond ((and number (eq action 'sub-item)) (concat "1" delim))
+                (if sub (make-string content ?\s) indent)
+                (cond ((and number sub) (concat "1" delim))
                       (number (format "%d%s" (1+ (string-to-number number)) delim))
                       (t bullet))
                 " "
@@ -236,12 +238,10 @@ Leaves point where text goes next."
            (earwig--md-item action)
          (let ((item (org-in-item-p)))
            (if (not item)
-               (earwig--start-list (eq action 'checkbox))
-             (let ((checkbox (or (eq action 'checkbox)
-                                 (save-excursion (goto-char item) (org-at-item-checkbox-p))))
-                   (org-M-RET-may-split-line nil))
-               (org-insert-item checkbox)
-               (when (eq action 'sub-item)
+               (earwig--start-list (memq action '(checkbox sub-checkbox)))
+             (let ((org-M-RET-may-split-line nil))
+               (org-insert-item (memq action '(checkbox sub-checkbox)))
+               (when (memq action '(sub-item sub-checkbox))
                  (org-indent-item)))))))))
 
 ;;;; Dictation
@@ -473,7 +473,7 @@ With COMMA, by commas."
 
 (earwig-defcommand earwig-say-structure ((action earwig-structure-phrase) (? (text earwig-text)))
   "Make the heading or item ACTION says, with TEXT in it."
-  :help "new heading | subheading | item | sub item | checkbox [TEXT]
+  :help "new heading | subheading | item | sub item | checkbox | sub checkbox [TEXT]
       (Org, Markdown; also in dictation, after a pause)"
   (earwig-cmd-structure action text))
 

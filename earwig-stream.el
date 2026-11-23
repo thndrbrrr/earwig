@@ -468,7 +468,8 @@ only sent once CALLBACK has run for this one."
         (setq earwig--stream-flushed (delq start earwig--stream-flushed)))
        ((not ok)
         (message "Transcription failed: %s" output))
-       ((not (string-empty-p output))
+       ;; Not a dash or dot written for silence
+       ((earwig-heard-words-p output)
         (earwig--stream-insert output start)))
     (error (message "Inserting dictation failed: %s" (error-message-string err))))
   (earwig--stream-provisional-done start)
@@ -508,6 +509,9 @@ only sent once CALLBACK has run for this one."
 In the buffer as an overlay where the segment will go; for a terminal,
 or a command with `earwig-provisional-command-display' set to
 `echo-area', in the echo area.  RAW is of the audio up to byte END."
+  ;; A dash or dot written for silence is nothing
+  (unless (earwig-heard-words-p raw)
+    (setq raw ""))
   ;; Only for the segment being spoken or one waiting for its final text
   (when (and earwig--stream-dir earwig--stream-target
              (or (= start earwig--stream-segment-start)
