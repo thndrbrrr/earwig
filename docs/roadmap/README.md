@@ -21,6 +21,4 @@ Windows comes after Linux: its test plan would follow linux-testing.md.
 | Item | Status | Document |
 |------|--------|----------|
 | Define all voice commands, Earwig's and the user's, as a phony.el grammar in Earwig's own English words, with commands taken from cursorfree.el (move, swap, change, wrap…), heading and section targets, and command boundaries found without "and then" | phases 1 and 2 built: all commands on Phony, boundaries without "and then", ranking over readings; the new targets and the commands taken from cursorfree. Phase 3 (hatty) not built | [phony-grammar.md](phony-grammar.md) |
-| Composable targets: quantifiers, units and filters ("with", "starting with", "ending with", "without") combined freely and nested with "in" / "of" to any depth, counted in each unit's natural container, with ranges ("the third through fifth words") | designed, not built | [composable-targets.md](composable-targets.md) |
 
-Composable targets extend the targets built in phase 2 of the phony grammar.
