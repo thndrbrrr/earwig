@@ -55,13 +55,22 @@
 ;;                               in last: the last dictation, or what a
 ;;                               command put in after it (earwig-move.el)
 ;;   [this | the | current] UNIT the UNIT around point
-;;   last | previous | next [N] UNIT[s]
+;;   last | previous | next | first [N] UNIT[s]
 ;;                               before or after point; N as digits or
-;;                               words ("last three words")
+;;                               words ("last three words"); "first" is
+;;                               "next".  Not the sentence point is
+;;                               inside, unless it's just before its end
+;;   the first | last [N] UNIT[s] of | in TARGET
+;;                               those of one of the parts of the buffer
+;;                               here: "the first word of this sentence"
+;;   the second | third ... UNIT of | in TARGET, the second to last ...
+;;                               the one that far from its start or end,
+;;                               up to the tenth; "next to last" too
 ;;   the UNIT with | containing WORDS
 ;;                               the nearest UNIT with WORDS in it; for a
-;;                               heading or section, in its title
-;;   the heading above, the parent heading
+;;                               heading or section, in its title ("this",
+;;                               "that" or "a" can go for "the")
+;;   the parent heading | headline
 ;;   the body of | the text under HEADING
 ;;                               a heading's own text, without Org's
 ;;                               planning line and drawers, up to its
@@ -75,11 +84,16 @@
 ;;   the next | following | previous | preceding WORDS
 ;;                               the nearest after or before point
 ;;   anything else               the nearest occurrence of those words
+;;   the word | the words WORDS
+;;                               those words, even ones that mean
+;;                               something else here: "the word this"
 ;;   WORDS in TARGET             words, A through B or the next WORDS,
 ;;                               looked for only in TARGET, one of the
 ;;                               parts of the buffer above: "meow in the
 ;;                               last two sentences"; otherwise "in" is a
-;;                               word, as in "log in screen"
+;;                               word, as in "log in screen".  For words,
+;;                               every place they are in TARGET; commands
+;;                               that act on one place take the nearest
 ;;   every | each WORDS [in TARGET]
 ;;                               all of them
 ;;   the start | beginning | end of TARGET
@@ -88,11 +102,12 @@
 ;;                               several targets; "A and B" only where
 ;;                               "A and B" isn't in the buffer as words
 ;; HEADING is one of the parts that name a heading: "this heading",
-;; "the section with budget", "the heading above", "the next heading".
+;; "the section with budget", "the parent heading", "the next heading".
 ;; UNIT is word, sentence, paragraph, line, heading (or headline: its
 ;; title, without stars, TODO keyword, priority or tags), section (or
 ;; subtree: a heading with all under it), item (or bullet: a list item
-;; with its sub-items) or link.  Headings are counted by position at any
+;; with its sub-items), checkbox (an item with one) or link.  Headings
+;; are counted by position at any
 ;; level, sections at the level of the one point is in.  Several places,
 ;; as "every" and "and" give, are acted on together, one undo step;
 ;; "select" takes one only.  "last word" leaves the
@@ -236,9 +251,10 @@ KIND is `select', `before' or `after'; for \"next one\".")
 
 (defun earwig--last-units (n unit)
   "Return (BEG . END) of the N UNITs (a string) before point.
-A word comes without the punctuation after it.  A sentence point is
-inside, as when it's just before the period, counts whole.  In evil's
-normal state the character under the cursor counts as before it."
+A word comes without the punctuation after it.  A sentence point is at
+the end of counts, also when point is just before its period; one point
+is inside doesn't, so it's those before it.  In evil's normal state the
+character under the cursor counts as before it."
   (if (equal unit "line")
       (cons (line-beginning-position (- 1 n)) (line-end-position 0))
     (save-excursion
@@ -249,7 +265,11 @@ normal state the character under the cursor counts as before it."
             (backward-char))
         (skip-chars-backward " \t\n"))
       (when (equal unit "sentence")
-        (goto-char (max (point) (save-excursion (backward-sentence) (forward-sentence) (point)))))
+        (let ((end (save-excursion (backward-sentence) (forward-sentence) (point))))
+          (if (string-match-p "[[:alnum:]]" (buffer-substring (point) (max (point) end)))
+              ;; Inside it: the ones before
+              (progn (backward-sentence) (skip-chars-backward " \t\n"))
+            (goto-char (max (point) end)))))
       (let ((end (point)))
         (pcase unit
           ("word" (backward-word n))
@@ -258,13 +278,21 @@ normal state the character under the cursor counts as before it."
         (if (equal unit "word") (earwig--unmarked (point) end) (cons (point) end))))))
 
 (defun earwig--next-units (n unit)
-  "Return (BEG . END) of the N UNITs (a string) after point."
+  "Return (BEG . END) of the N UNITs (a string) after point.
+Not a sentence point is inside: those after it."
   (if (equal unit "line")
       (cons (line-beginning-position 2) (line-end-position (1+ n)))
     (save-excursion
       (if (equal unit "word")
           (while (and (not (eobp)) (not (earwig--letter-p (char-after))))
             (forward-char))
+        (skip-chars-forward " \t\n"))
+      (when (and (equal unit "sentence")
+                 (string-match-p "[[:alnum:]]"
+                                 (buffer-substring (save-excursion (forward-sentence)
+                                                                   (backward-sentence) (point))
+                                                   (point))))
+        (forward-sentence)
         (skip-chars-forward " \t\n"))
       (let ((beg (point)))
         (pcase unit
@@ -283,6 +311,11 @@ So you see where it went.  \"where is TARGET\" flashes either way."
   :type 'boolean
   :group 'earwig)
 
+(defcustom earwig-flash-duration 1.5
+  "How long, in seconds, text flashes: what a command put in, or \"where is\" found."
+  :type 'number
+  :group 'earwig)
+
 (defvar earwig--last-put nil
   "(BEG END DICTATION) of the text a command put in last, for \"that\".
 BEG and END are markers.  DICTATION is `earwig--last-dictation' as it
@@ -298,7 +331,7 @@ was then: once that's something else, a dictation came after.")
     (let ((overlay (make-overlay beg end)))
       (overlay-put overlay 'face 'earwig-flash)
       (overlay-put overlay 'priority 100)
-      (run-at-time 0.6 nil #'delete-overlay overlay))))
+      (run-at-time earwig-flash-duration nil #'delete-overlay overlay))))
 
 (defun earwig--put (beg end)
   "Remember BEG to END as the text a command just put in, for \"that\"."
@@ -334,11 +367,18 @@ That's the last dictation, or text a command put in after it."
       (`(next ,n ,unit) (concat "next " (funcall units n unit)))
       ('(buffer) "the buffer")
       (`(with ,unit ,words) (format "the %s with %s" unit words))
-      ('(parent) "the heading above")
+      ('(parent) "the parent heading")
       (`(body ,heading) (concat "the body of " (funcall text heading)))
       (`(under ,heading) (concat "everything under " (funcall text heading)))
       (`(subheadings ,heading)
        (if heading (concat "the subheadings of " (funcall text heading)) "the subheadings"))
+      (`(within ,edge ,n ,unit ,part)
+       (format "the %s %s of %s" edge (funcall units n unit) (funcall text part)))
+      (`(nth ,n ,from ,unit ,part)
+       (format "the %s%s %s of %s"
+               (nth n '(nil nil "second" "third" "fourth" "fifth" "sixth" "seventh" "eighth"
+                            "ninth" "tenth"))
+               (if (eq from 'end) " to last" "") unit (funcall text part)))
       (`(words ,words) words)
       (`(through ,a ,b) (format "%s through %s" a b))
       (`(in ,what ,part) (format "%s in %s" (funcall text what) (funcall text part)))
@@ -609,6 +649,23 @@ An item's range has its continuation lines and sub-items in it."
         (forward-line 1)))
     (nreverse items)))
 
+(defun earwig--plural (unit)
+  "Return the plural of UNIT, a value of `earwig-unit'."
+  (if (equal unit "checkbox") "checkboxes" (concat unit "s")))
+
+(defun earwig--checkbox-item-p (item)
+  "Non-nil if ITEM, (START . END), has a checkbox."
+  (save-excursion
+    (goto-char (car item))
+    (and (looking-at earwig--md-item-regexp) (match-beginning 5) t)))
+
+(defun earwig--items-of (unit)
+  "Return the list items for UNIT: all for \"item\", those with a checkbox
+for \"checkbox\"."
+  (if (equal unit "checkbox")
+      (cl-remove-if-not #'earwig--checkbox-item-p (earwig--items))
+    (earwig--items)))
+
 (defun earwig--item-at (pos items)
   "Return the innermost of ITEMS that POS is in, or nil."
   (let (found)
@@ -621,10 +678,11 @@ An item's range has its continuation lines and sub-items in it."
   "Return the range of ITEM, (START . END): whole lines."
   (list (car item) (cdr item) t nil "item"))
 
-(defun earwig--items-near (n after)
+(defun earwig--items-near (n after &optional unit)
   "Return the range of N list items before point, or AFTER it.
-By position, at any level; not the items point is in."
-  (let* ((items (earwig--items))
+By position, at any level; not the items point is in.  UNIT
+\"checkbox\" counts only items with one."
+  (let* ((items (earwig--items-of unit))
          (current (earwig--item-at (point) items))
          (from (if current (car current) (point)))
          (found (if after
@@ -635,7 +693,9 @@ By position, at any level; not the items point is in."
                                       items))
                             n))))
     (when (< (length found) n)
-      (user-error "%s %s" (if found (format "Only %d items" (length found)) "No items")
+      (user-error "%s %s" (format "%s %s" (if found (format "Only %d" (length found)) "No")
+                                  (if (= (length found) 1) (or unit "item")
+                                    (earwig--plural (or unit "item"))))
                   (if after "after this" "before this")))
     (list (list (apply #'min (mapcar #'car found)) (apply #'max (mapcar #'cdr found))
                 t nil "item"))))
@@ -703,8 +763,9 @@ Signals a `user-error' if there's none."
        (if (equal unit "heading")
            (earwig--heading-title heading)
          (earwig--section heading headings))))
-    ("item" (earwig--item-range (or (earwig--item-at pos (earwig--items))
-                                    (user-error "No list item here"))))
+    ((or "item" "checkbox")
+     (earwig--item-range (or (earwig--item-at pos (earwig--items-of unit))
+                             (user-error "No %s here" (if (equal unit "item") "list item" unit)))))
     ("link" (earwig--link-range (or (cl-find-if (lambda (link) (<= (car link) pos (cdr link)))
                                                 (earwig--links))
                                     (user-error "No link here"))))))
@@ -713,7 +774,7 @@ Signals a `user-error' if there's none."
   "Return the ranges of the N UNITs before point, or AFTER it."
   (pcase unit
     ((or "heading" "section") (earwig--headings-near n unit after))
-    ("item" (earwig--items-near n after))
+    ((or "item" "checkbox") (earwig--items-near n after unit))
     ("link" (earwig--links-near n after))
     (_ (let ((range (if after (earwig--next-units n unit) (earwig--last-units n unit))))
          (list (list (car range) (cdr range) (equal unit "line") nil unit))))))
@@ -747,10 +808,12 @@ See `earwig-target' for SPEC.  Signals a `user-error' if it isn't there,
 or if it's a part of the buffer with nothing in it, unless EMPTY-OK."
   (let ((ranges
          (pcase spec
-           ('(region) (let ((region (or (earwig--region) (user-error "No region"))))
-                        (list (list (car region) (cdr region) nil nil nil))))
-           ('(that) (let ((that (earwig--that)))
-                      (list (list (car that) (cdr that) nil nil nil))))
+           ('(region) (list (earwig--region-range
+                             (or (earwig--region) (user-error "No region")))))
+           ('(that) (list (if (earwig--region)
+                              (earwig--region-range (earwig--region))
+                            (let ((that (earwig--that)))
+                              (list (car that) (cdr that) nil nil nil)))))
            (`(this ,unit) (list (earwig--unit-at unit (point))))
            (`(last ,n ,unit) (earwig--units-near n unit nil))
            (`(next ,n ,unit) (earwig--units-near n unit t))
@@ -783,6 +846,8 @@ or if it's a part of the buffer with nothing in it, unless EMPTY-OK."
             (pcase (or (earwig--through-range a b)
                        (user-error "No \"%s\" through \"%s\" here" a b))
               (`(,beg . ,end) (list (list beg end nil nil nil)))))
+           (`(within ,edge ,n ,unit ,part) (earwig--resolve-within edge n unit part))
+           (`(nth ,n ,from ,unit ,part) (earwig--resolve-nth n from unit part))
            (`(in ,what ,part)
             (earwig--resolve-in (earwig-target-spec what) (earwig--ranges part)))
            (`(every ,words ,part)
@@ -797,7 +862,8 @@ or if it's a part of the buffer with nothing in it, unless EMPTY-OK."
                   (user-error "No \"%s\" %s" words (if part "there" "here")))))
            (`(near ,direction ,words) (earwig--resolve-near direction words nil))
            (`(edge ,edge ,target)
-            (let* ((ranges (earwig--resolve (earwig-target-spec target) t))
+            (let* ((ranges (earwig--choose (earwig-target-spec target)
+                                           (earwig--resolve (earwig-target-spec target) t)))
                    (pos (if (eq edge 'start) (car (car ranges)) (cadr (car (last ranges))))))
               ;; An empty body stays one, so text put there gets a line
               (list (list pos pos nil nil (if (and (equal (nth 4 (car ranges)) "body")
@@ -812,13 +878,95 @@ or if it's a part of the buffer with nothing in it, unless EMPTY-OK."
           (user-error "Nothing there: %s" (earwig--spec-text spec)))))
     ranges))
 
+(defun earwig--units-in (unit beg end &optional own)
+  "Return the ranges of the UNITs from BEG to END, in order.
+For headings, sections, items and links: by position, at any level, but
+sections at the outermost level there.  OWN non-nil means BEG to END is
+a section, whose own heading doesn't count."
+  (let ((inside (lambda (things) (cl-remove-if-not (lambda (thing) (and (<= beg (car thing))
+                                                                         (<= (cdr thing) end)))
+                                                   things))))
+    (pcase unit
+      ((or "item" "checkbox")
+       (mapcar #'earwig--item-range (funcall inside (earwig--items-of unit))))
+      ("link" (mapcar #'earwig--link-range (funcall inside (earwig--links))))
+      ((or "heading" "section")
+       (let* ((headings (earwig--headings))
+              (found (cl-remove-if-not (lambda (h) (and (if own (< beg (car h)) (<= beg (car h)))
+                                                        (< (car h) end)))
+                                       headings)))
+         (if (equal unit "heading")
+             (mapcar #'earwig--heading-title found)
+           (let ((level (and found (apply #'min (mapcar #'cdr found)))))
+             (mapcar (lambda (h) (earwig--section h headings))
+                     (cl-remove-if-not (lambda (h) (= (cdr h) level)) found)))))))))
+
+(defun earwig--within-units (edge n unit part)
+  "Return the ranges of the first or last (EDGE) N UNITs of PART, a target.
+Headings, sections, items and links one range each, other units one
+range for all of them."
+  (let* ((ranges (earwig--ranges part))
+         (beg (car (car ranges)))
+         (end (cadr (car (last ranges))))
+         (found (if (member unit '("heading" "section" "item" "checkbox" "link"))
+                    (let ((all (earwig--units-in unit beg end
+                                                 (equal (nth 4 (car ranges)) "section"))))
+                      (and (>= (length all) n)
+                           (if (eq edge 'first) (seq-take all n) (last all n))))
+                  (save-excursion
+                    (goto-char (if (eq edge 'first) beg end))
+                    (earwig--units-near n unit (eq edge 'first))))))
+    (unless (and found
+                 (cl-every (lambda (range) (and (<= beg (car range)) (<= (cadr range) end)))
+                           found))
+      (user-error "Not %s there" (if (= n 1) (concat "a " unit)
+                                   (format "%d %s" n (earwig--plural unit)))))
+    found))
+
+(defun earwig--resolve-within (edge n unit part)
+  "Return the ranges of the first or last (EDGE) N UNITs of PART, a target."
+  (let ((found (earwig--within-units edge n unit part)))
+    ;; Items and sections are one stretch of lines, as \"next two items\" are
+    (if (and (cdr found) (member unit '("item" "checkbox" "section")))
+        (list (list (car (car found)) (apply #'max (mapcar #'cadr found)) t nil
+                    (if (equal unit "section") unit "item")))
+      found)))
+
+(defun earwig--resolve-nth (n from unit part)
+  "Return the range of the Nth UNIT of PART, a target.
+Counted from its start or, with FROM `end', its end."
+  (let ((found (earwig--within-units (if (eq from 'start) 'first 'last) n unit part)))
+    (if (member unit '("heading" "section" "item" "checkbox" "link"))
+        (list (if (eq from 'start) (car (last found)) (car found)))
+      ;; One range for all N: the Nth is the one at its far edge
+      (pcase-let ((`(,beg ,end) (car found)))
+        (save-excursion
+          (goto-char (if (eq from 'start) end beg))
+          (earwig--units-near 1 unit (eq from 'end)))))))
+
+(defun earwig--region-range (region)
+  "Return the range of REGION, (BEG . END).
+Whole lines are lines, as a line or item target is, so they move and
+delete as lines; list items if the first is one."
+  (pcase-let* ((`(,beg . ,end) region)
+               ;; A region that takes the last line break, as evil's line-wise one
+               (end (if (and (> end beg) (eq (char-before end) ?\n)) (1- end) end)))
+    (if (and (< beg end)
+             (save-excursion (goto-char beg) (bolp))
+             (save-excursion (goto-char end) (eolp)))
+        (list beg end t nil (and (save-excursion (goto-char beg) (earwig--item-line-p)) "item"))
+      (list (car region) (cdr region) nil nil nil))))
+
 (defun earwig--resolve-in (what scopes)
-  "Return the ranges of the target spec WHAT, looked for only in SCOPES."
+  "Return the ranges of the target spec WHAT, looked for only in SCOPES.
+For words, every place they are there."
   (pcase what
     (`(words ,words)
      (let ((regexp (earwig--phrase-regexp words)))
-       (pcase (or (earwig--nearest-in regexp scopes) (user-error "No \"%s\" there" words))
-         (`(,beg . ,end) (list (list beg end nil regexp "words"))))))
+       (or (cl-loop for (beg end) in scopes
+                    append (mapcar (lambda (match) (list (car match) (cdr match) nil regexp "words"))
+                                   (earwig--matches regexp beg end)))
+           (user-error "No \"%s\" there" words))))
     (`(through ,a ,b)
      (pcase (or (cl-some (pcase-lambda (`(,beg ,end)) (earwig--through-range a b beg end))
                          scopes)
@@ -865,10 +1013,26 @@ Nil is the region.  Each is (BEG END LINE-P REGEXP UNIT), see
 \"Targets\" above.  Signals a `user-error' if it isn't there."
   (earwig--resolve (if target (earwig-target-spec target) '(region))))
 
+(defun earwig--choose (spec ranges)
+  "Return RANGES, of the target SPEC, or the nearest of them if they're choices.
+They are for WORDS in PART, every place they are there, where a command
+that acts on one place takes the nearest."
+  (if (and (cdr ranges) (eq (car spec) 'in) (eq (car (earwig-target-spec (nth 1 spec))) 'words))
+      (let ((nearest (earwig--first-nearest
+                      (lambda (match)
+                        (cl-find-if (lambda (range) (and (= (car range) (car match))
+                                                         (= (cadr range) (cdr match))))
+                                    ranges))
+                      (mapcar (lambda (range) (cons (car range) (cadr range))) ranges))))
+        (list nearest))
+    ranges))
+
 (defun earwig--target (target)
   "Return the one range of TARGET, an `earwig-target'; nil is the region.
-Signals a `user-error' if it isn't there, or is several places."
-  (let ((ranges (earwig--ranges target)))
+The nearest of WORDS in PART.  Signals a `user-error' if it isn't there,
+or is several places."
+  (let ((ranges (earwig--choose (if target (earwig-target-spec target) '(region))
+                                (earwig--ranges target))))
     (when (cdr ranges)
       (user-error "That's %d places, not one: %s" (length ranges)
                   (earwig--spec-text (earwig-target-spec target))))
@@ -920,10 +1084,35 @@ up last paragraph\" might, see the manual."
     (goto-char end)
     (push-mark beg t t)))
 
-(defun earwig--tidy-gap (pos)
-  "Fix the spacing at POS, where text was just deleted."
+(defun earwig--tidy-sentence-start (pos deleted)
+  "Tidy the start of a sentence that deleting DELETED at POS left.
+Punctuation left there goes, with the space after it, as \"Yeah! Igor
+owns it\" leaves \"! Igor owns it\" without \"Yeah\"; after an opening
+parenthesis too.  If DELETED started with a capital and wasn't whole
+lines, the next word gets it."
   (save-excursion
     (goto-char pos)
+    (skip-chars-forward " \t")
+    (let ((paren (eq (char-before (save-excursion (skip-chars-backward " \t") (point))) ?\()))
+      (when (or paren (earwig--sentence-start-p (point)))
+        (when (looking-at "[,;:.!?]+[ \t]*")
+          (delete-region (point) (match-end 0)))
+        (when (and (not paren)
+                   (not (string-search "\n" deleted))
+                   (let ((case-fold-search nil))
+                     (and (string-match-p "\\`[^[:alnum:]]*[[:upper:]]" deleted)
+                          (looking-at-p "[[:lower:]]"))))
+          (upcase-region (point) (1+ (point))))))))
+
+(defun earwig--tidy-gap (pos &optional deleted)
+  "Fix the spacing at POS, where text was just deleted.
+With DELETED, the text deleted, the start of a sentence it was is
+tidied too, see `earwig--tidy-sentence-start'; not when something takes
+its place."
+  (save-excursion
+    (goto-char pos)
+    (when deleted
+      (earwig--tidy-sentence-start pos deleted))
     (let ((space '(?\s ?\t)))
       (cond
        ((and (memq (char-before) space) (memq (char-after) space))
@@ -954,10 +1143,14 @@ LINE-P means whole lines, whose newline goes too when deleted or cut."
            (when line-p (earwig--kill-lines))
            (message "Copied \"%s\"" (truncate-string-to-width
                                       (string-trim-right (current-kill 0 t)) 50 nil nil t)))
-    ('delete (delete-region beg end) (earwig--tidy-gap beg))
-    ('cut (kill-region beg end)
-          (when line-p (earwig--kill-lines))
-          (earwig--tidy-gap beg))
+    ;; Whole lines leave no gap to tidy: the next line's indentation stays
+    ('delete (let ((text (buffer-substring-no-properties beg end)))
+               (delete-region beg end)
+               (unless line-p (earwig--tidy-gap beg text))))
+    ('cut (let ((text (buffer-substring-no-properties beg end)))
+            (kill-region beg end)
+            (when line-p (earwig--kill-lines))
+            (unless line-p (earwig--tidy-gap beg text))))
     ('capitalize (upcase-initials-region beg end))
     ('upcase (upcase-region beg end))
     ('downcase (downcase-region beg end))
@@ -1249,7 +1442,9 @@ between them."
       (when (and line-p (memq verb '(delete cut)) (< end (point-max)))
         (setq end (1+ end)))
       (pcase verb
-        ((or 'delete 'cut) (delete-region beg end) (earwig--tidy-gap beg))
+        ((or 'delete 'cut) (let ((text (buffer-substring-no-properties beg end)))
+                             (delete-region beg end)
+                             (unless line-p (earwig--tidy-gap beg text))))
         ('capitalize (upcase-initials-region beg end))
         ('upcase (upcase-region beg end))
         ('downcase (downcase-region beg end))
@@ -1261,7 +1456,10 @@ between them."
 Nil is the region.  See the commentary of earwig-edit.el."
   (when (and (eq verb 'select) (null target) (not (earwig--region)))
     (user-error "Select what?"))
-  (let ((ranges (earwig--ranges target)))
+  (let ((ranges (if (eq verb 'select)
+                    (earwig--choose (if target (earwig-target-spec target) '(region))
+                                    (earwig--ranges target))
+                  (earwig--ranges target))))
     (cond
      ((cdr ranges)
       (when (eq verb 'select)
@@ -1366,11 +1564,34 @@ Returns the number replaced."
   '("that" "this" "it" "the region" "region" "the selection" "selection")
   "What \"replace A with B\" can say as A for the region.")
 
+(defun earwig--replace-words (old)
+  "Return the words \"replace OLD with ...\" replaces.
+OLD is words, or a target for the next, previous or every place they are."
+  (if (earwig-target-p old)
+      (pcase (earwig-target-spec old)
+        (`(near ,_ ,words) words)
+        (`(every ,words ,_) words))
+    old))
+
 (defun earwig--replace-plan (old part everywhere)
   "Return what to replace for \"replace OLD with ...\", or nil if nothing.
 In PART, an `earwig-part' value, or with EVERYWHERE, every OLD there:
 that's (scope RANGES); otherwise the nearest OLD, (nearest BEG END),
-or the region for \"replace that\", (region BEG END)."
+or the region for \"replace that\", (region BEG END).  OLD can also be
+the next or previous WORDS, the nearest that way in PART if given, or
+every WORDS, as with EVERYWHERE or in its own part."
+  (if (earwig-target-p old)
+      (pcase (earwig-target-spec old)
+        (`(near ,direction ,words)
+         (let ((scopes (cond (everywhere nil) (part (earwig--ranges part)))))
+           (pcase (ignore-error user-error (earwig--resolve-near direction words scopes))
+             (`((,beg ,end . ,_)) (list 'nearest beg end)))))
+        (`(every ,words ,own)
+         (earwig--replace-plan words (or own part) (not (or own part)))))
+    (earwig--replace-plan-words old part everywhere)))
+
+(defun earwig--replace-plan-words (old part everywhere)
+  "Return what to replace for the words OLD, see `earwig--replace-plan'."
   (let ((scopes (cond (everywhere (list (list (point-min) (point-max))))
                       (part (earwig--ranges part))))
         (regexp (earwig--phrase-regexp old))
@@ -1391,8 +1612,13 @@ or the region for \"replace that\", (region BEG END)."
 PART is an `earwig-part' value.  \"replace that with B\" replaces the
 region when there is one."
   (barf-if-buffer-read-only)
-  (pcase-let ((`(,kind ,beg ,end) (or (earwig--replace-plan old part everywhere)
-                                      (user-error "Nothing to replace: \"%s\"" old))))
+  (pcase-let ((`(,kind ,beg ,end)
+               (or (earwig--replace-plan old part everywhere)
+                   (user-error "Nothing to replace: \"%s\""
+                               (if (earwig-target-p old)
+                                   (earwig--spec-text (earwig-target-spec old))
+                                 old))))
+              (old (earwig--replace-words old)))
     (undo-boundary)
     (message "Replaced %d"
              (pcase kind
@@ -1511,7 +1737,7 @@ line put in, after its indentation, as with evil's paste."
     ("the next | previous WORDS"       "the nearest after or before the cursor")
     ("every | each WORDS [in TARGET]"  "all of them")
     ("[from] A until | through B"      "from words A to words B")
-    ("WORDS in TARGET"                 "WORDS, looked for only in TARGET")
+    ("WORDS in TARGET"                 "every place WORDS are in TARGET")
     (""                                "(\"meow in the last two sentences\")")
     ("the start | end of TARGET"       "the place before or after it")
     ("A and B, both A and B, each of A B and C" "")
@@ -1519,9 +1745,12 @@ line put in, after its indentation, as with evil's paste."
     ("the body of TARGET"              "a heading's own text")
     ("everything under TARGET"         "its text and subheadings")
     ("the subheadings [of TARGET]"     "")
-    ("the heading above"               "the parent heading")
+    ("the parent heading | headline"   "")
+    ("the first | last [N] UNITs of TARGET" "\"the first word of this sentence\"")
+    ("the second | third ... [to last] UNIT of TARGET" "\"the second sentence of this paragraph\"")
+    ("the word | the words WORDS"     "those words, even \"this\" or \"next\"")
     (""                                "UNIT: word, sentence, paragraph, line,")
-    (""                                "heading, section, item, link"))
+    (""                                "heading, section, item, checkbox, link"))
   "What \"what can I say\" shows for TARGET, as (SPOKEN EXPLANATION).")
 
 ;;;; The commands' grammar
@@ -1545,15 +1774,23 @@ line put in, after its indentation, as with evil's paste."
 (earwig-defcommand earwig-say-format ("format" (style earwig-format-style)
                                       (? (target earwig-target)))
   "Format TARGET, or the region, in STYLE."
-  :help "format bold | italic | underline | code | verbatim | strike through | plain TARGET"
+  :help "format bold | italic | underline | code | verbatim | strike through | plain TARGET,
+      format TARGET bold | italic | ..."
   :check (and (earwig--format-entry) (or target (earwig--region)))
   (earwig-cmd-format style target))
 
+(earwig-defcommand earwig-say-format-after ("format" (target earwig-target)
+                                            (style earwig-format-style))
+  "Format TARGET in STYLE, said after it: \"format that bold\"."
+  :check (earwig--format-entry)
+  (earwig-cmd-format style target))
+
 (earwig-defcommand earwig-say-replace
-    ("replace" (old earwig-words) "with" (new earwig-text)
-     (? (| (seq "in" (part earwig-part)) (everywhere "everywhere"))))
-  "Replace OLD with NEW, nearest, in PART or EVERYWHERE."
-  :help "replace A with B [in TARGET | everywhere]"
+    ("replace" (old (| earwig-words earwig-target-near earwig-target-every)) "with"
+     (new earwig-text) (? (| (seq "in" (part earwig-part)) (everywhere "everywhere"))))
+  "Replace OLD with NEW, nearest, in PART or EVERYWHERE.
+OLD is words, or the next, previous or every place they are."
+  :help "replace [the next | previous | every] A with B [in TARGET | everywhere]"
   :check (earwig--replace-plan old part everywhere)
   (earwig-cmd-replace old new part (and everywhere t)))
 

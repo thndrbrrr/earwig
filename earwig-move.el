@@ -163,7 +163,9 @@ lines, or nil to leave them as they are."
             (if (equal unit "item")
                 (list end "\n" "" nil (earwig--item-column beg))
               (pcase-let ((`(,heading . ,headings) (earwig--heading-there beg)))
-                (append (earwig--into-heading heading headings gap) (list nil nil)))))
+                ;; Lines, as a sub-item, go to the margin of the heading's text
+                (append (earwig--into-heading heading headings gap)
+                        (list nil (and (eq shape 'lines) 0))))))
            ((or 'before 'start)
             (list (if (eq shape 'paragraph)
                       (earwig--paragraph-edge beg nil)
@@ -230,15 +232,18 @@ LEVEL is for sections, see `earwig--range-text'."
        (cond ((< end (point-max)) (delete-region beg (1+ end)))
              ((> beg (point-min)) (delete-region (1- beg) end))
              (t (delete-region beg end)))
-       (earwig--squeeze-blank-lines (min beg (point-max))))
+       (earwig--squeeze-blank-lines (min beg (point-max)))
+       ;; What's left of a numbered list numbers on from 1
+       (earwig--repair-list (min beg (point-max))))
       ('paragraph
        (let ((after (save-excursion (goto-char end) (skip-chars-forward " \t\n") (point))))
          (if (< after (point-max))
              (delete-region beg after)
            (delete-region (save-excursion (goto-char beg) (skip-chars-backward " \t\n") (point))
                           end))))
-      (_ (delete-region beg end)
-         (earwig--tidy-gap beg)))))
+      (_ (let ((text (buffer-substring-no-properties beg end)))
+           (delete-region beg end)
+           (earwig--tidy-gap beg text))))))
 
 (defun earwig--repair-list (pos)
   "In Org, renumber the list at POS, if there is one."
@@ -628,23 +633,67 @@ Nil PAIR is the nearest quotes or brackets."
      (end-of-line)
      (earwig-cmd-structure (if (eq where 'under) 'subheading 'heading) nil))))
 
-(defun earwig--new-item (where item)
-  "Make a list item WHERE (`before', `after' or `under') ITEM, (START . END)."
+(defun earwig--new-item (where item &optional checkbox)
+  "Make a list item WHERE (`before', `after' or `under') ITEM, (START . END).
+With CHECKBOX, it has one."
   (pcase where
     ('before
      (goto-char (car item))
      (looking-at earwig--md-item-regexp)
      (let ((indent (match-string 1))
-           (bullet (or (match-string 2) (concat (match-string 3) (match-string 4))))
-           (checkbox (and (match-beginning 5) "[ ] ")))
-       (insert indent bullet " " (or checkbox ""))
+           (bullet (or (match-string 2) (concat (match-string 3) (match-string 4)))))
+       ;; Only "new checkbox" makes one
+       (insert indent bullet " " (if checkbox "[ ] " ""))
        (save-excursion (insert "\n"))
        (earwig--repair-list (point))
        (earwig--open-structure-here 'item)))
     (_
      (goto-char (car item))
      (end-of-line)
-     (earwig-cmd-structure (if (eq where 'under) 'sub-item 'item) nil))))
+     (earwig-cmd-structure (if (eq where 'under)
+                               (if checkbox 'sub-checkbox 'sub-item)
+                             (if checkbox 'checkbox 'item))
+                           nil))))
+
+(defun earwig--names-heading-p (range)
+  "Non-nil if RANGE, a target's, is a heading, its section or its text."
+  (or (member (nth 4 range) '("heading" "section" "body"))
+      (let ((heading (earwig--heading-at (car range) (earwig--headings))))
+        (and heading (= (car heading) (save-excursion (goto-char (car range))
+                                                      (line-beginning-position)))))))
+
+(defun earwig--new-item-under-heading (pos &optional checkbox)
+  "Make a list item at the end of the own text of the heading POS is under.
+It continues the list that text ends with, at its outermost level, or
+else starts a list there.  With CHECKBOX, it has one."
+  (pcase-let* ((`(,heading . ,headings) (earwig--heading-there pos))
+               (`(,beg ,end) (earwig--body heading headings))
+               (items (cl-remove-if-not (lambda (item) (<= beg (car item) end)) (earwig--items)))
+               (last (car (last items)))
+               (top (and last
+                         (string-blank-p (buffer-substring-no-properties (min (cdr last) end) end))
+                         (cl-find-if (lambda (item) (and (<= (car item) (car last))
+                                                         (>= (cdr item) (cdr last))))
+                                     items))))
+    (if top
+        (progn
+          (goto-char (car top))
+          (looking-at earwig--md-item-regexp)
+          (let ((indent (match-string 1))
+                (bullet (if (match-beginning 2)
+                            (match-string 2)
+                          (concat (number-to-string (1+ (string-to-number (match-string 3))))
+                                  (match-string 4)))))
+            (goto-char (cdr top))
+            (end-of-line)
+            (insert "\n" indent bullet " " (if checkbox "[ ] " ""))
+            (earwig--repair-list (point))
+            (end-of-line)))
+      (pcase-let ((`(,pos ,before ,after) (earwig--into-heading heading headings "\n\n")))
+        (goto-char pos)
+        (insert before "- " (if checkbox "[ ] " ""))
+        (save-excursion (insert after))))
+    (earwig--open-structure-here 'item)))
 
 (defun earwig--new-paragraph (where range)
   "Make an empty paragraph WHERE (`before', `after' or `under') RANGE, at point.
@@ -674,8 +723,8 @@ splitting its paragraph there; under a heading, at the end of its text."
 
 (defun earwig-cmd-new-at (what where target)
   "Make a WHAT, WHERE TARGET, an `earwig-target', for dictation to fill.
-WHAT is `paragraph', `item', `heading' or `subheading'; WHERE is
-`before', `after' or `under'."
+WHAT is `paragraph', `item', `checkbox' (an item with one), `heading'
+or `subheading'; WHERE is `before', `after' or `under'."
   (barf-if-buffer-read-only)
   (let ((range (earwig--target target)))
     (undo-boundary)
@@ -683,11 +732,15 @@ WHAT is `paragraph', `item', `heading' or `subheading'; WHERE is
     (earwig--done-with-region)
     (pcase what
       ('paragraph (earwig--new-paragraph where range))
-      ('item
+      ((or 'item 'checkbox)
        (unless (earwig--structure-mode-p)
          (user-error "No lists in %s" major-mode))
-       (earwig--new-item where (or (earwig--item-at (car range) (earwig--items))
-                                   (user-error "No list item there"))))
+       (let ((item (earwig--item-at (car range) (earwig--items)))
+             (checkbox (eq what 'checkbox)))
+         (cond (item (earwig--new-item where item checkbox))
+               ((and (eq where 'under) (earwig--names-heading-p range))
+                (earwig--new-item-under-heading (car range) checkbox))
+               (t (user-error "No list item there")))))
       (_
        (earwig--new-heading (if (eq what 'subheading) 'under where)
                             (car (earwig--heading-there (car range))))))))
@@ -794,9 +847,11 @@ before its first sub-item."
   '(("quotes" . quotes) ("quote marks" . quotes) ("quotation marks" . quotes)
     ("double quotes" . quotes)
     ("single quotes" . single-quotes)
-    ("parentheses" . parentheses) ("parens" . parentheses) ("brackets" . parentheses)
-    ("round brackets" . parentheses)
-    ("square brackets" . square-brackets)
+    ("quote" . quotes) ("double quote" . quotes) ("single quote" . single-quotes)
+    ("parentheses" . parentheses) ("parenthesis" . parentheses) ("parens" . parentheses)
+    ("brackets" . parentheses) ("bracket" . parentheses)
+    ("round brackets" . parentheses) ("round bracket" . parentheses)
+    ("square brackets" . square-brackets) ("square bracket" . square-brackets)
     ("dashes" . dashes)
     ("commas" . commas)))
 
@@ -828,11 +883,11 @@ before its first sub-item."
 
 (earwig-defcommand earwig-say-put-around ("put" (pair earwig-pair) "around" (what earwig-target))
   "Put PAIR around WHAT."
-  :help "put PAIR around TARGET, wrap TARGET in PAIR
+  :help "put PAIR around TARGET, wrap TARGET in | into PAIR
       (PAIR: quotes, single quotes, parentheses, brackets, square brackets, dashes, commas)"
   (earwig-cmd-wrap pair what))
 
-(earwig-defcommand earwig-say-wrap ("wrap" (what earwig-target) "in" (pair earwig-pair))
+(earwig-defcommand earwig-say-wrap ("wrap" (what earwig-target) (| "in" "into") (pair earwig-pair))
   "Put PAIR around WHAT."
   (earwig-cmd-wrap pair what))
 
@@ -862,14 +917,20 @@ before its first sub-item."
   (earwig-cmd-rewrap old what new))
 
 (earwig-defcommand earwig-say-new-at ((| "new" "add a" "add an")
-                                      (what (| "paragraph" "item" "bullet" "heading"))
+                                      (what (| "paragraph" "item" "bullet" "heading"
+                                               "checkbox" "check box"))
                                       (where (| "before" "after" "under"))
                                       (target earwig--one-target))
   "Make a WHAT WHERE TARGET, for dictation to fill."
-  :help "new | add a paragraph | item | heading before | after | under TARGET,
-      new subheading under TARGET"
+  :help "new | add a paragraph | item | checkbox | heading before | after | under TARGET,
+      new subheading under TARGET  (an item under a heading ends its text,
+      under an item it's a sub-item: \"new checkbox under this item\")"
   :go t
-  (earwig-cmd-new-at (if (equal what "bullet") 'item (intern what)) (intern where) target))
+  (earwig-cmd-new-at (pcase what
+                       ("bullet" 'item)
+                       ((or "checkbox" "check box") 'checkbox)
+                       (_ (intern what)))
+                     (intern where) target))
 
 (earwig-defcommand earwig-say-new-subheading ((| "new" "add a") (| "subheading" "sub heading")
                                               "under" (target earwig--one-target))

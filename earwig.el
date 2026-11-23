@@ -465,7 +465,8 @@ It goes into the current buffer at point."
             (cond
              ((not ok)
               (message "Transcription failed: %s" output))
-             ((string-empty-p output)
+             ;; Or a dash or dot written for silence
+             ((not (earwig-heard-words-p output))
               (message "Nothing heard"))
              (t
               (earwig--follow-point target)
