@@ -98,7 +98,21 @@ one command they're words, as in \"replace and then with so\"."
 ;;   ruled out when it's evaluated (`earwig--candidates').
 ;; - Case (request 4): words are compared lowercased by binding
 ;;   `phony-parser--literal-normalizer', the experimental normalizer's
-;;   variable, while parsing.
+;;   variable, while parsing, and incrementing
+;;   `phony-parser--current-generation' so Phony's cache is cleared.
+;; - Rules that refer to themselves (request 5): Phony builds its
+;;   parsers eagerly, so it can't.  Targets are layered, and a part's
+;;   chain is a repeated `earwig--link' that `earwig--fold-chain' nests
+;;   (see "Targets").
+;; - Rules and patterns (request 6): help, `earwig--pattern-help' and
+;;   `earwig--user-commands' (earwig-commands.el), reads them with
+;;   Phony's private `phony--' and `phony-pattern--' functions.
+;; - Extending `phony-defun' (request 7): `earwig-defcommand' gets the
+;;   arguments for :check with `phony--collect-arguments' and
+;;   `phony--expand-implicit-arguments'.
+;; - Built-in patterns (request 8): `earwig-number', `earwig-words' and
+;;   `earwig-text' use the private `phony--builtin-word' and
+;;   `phony--builtin-phrase'.
 
 (defvar earwig--prepared nil
   "Phony's grammar prepared for parsing, or nil once a rule has changed.

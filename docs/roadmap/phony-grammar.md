@@ -465,11 +465,33 @@ For now Earwig works around these (agreed): it calls the private functions and h
 itself. The requests go to Phony's author as feedback once the approach is proven, so the
 workarounds should be easy to find and replace later.
 
-1. A public API returning all readings (`phony-parser--parse-utterance` exists, privately).
-2. A mode with no speech backend: no Talon export, no server prompt, no active-rules timer.
+1. A public API returning all readings (`phony-parser--parse-utterance` exists, privately),
+   and an evaluator for any prepared grammar (`phony--evaluate-ast` only knows the exported
+   one). To find where commands start and end, Earwig also needs which spans parse: the readings
+   of every prefix from a given word, with rule anchors applied. For now it steps
+   `phony-parser--parser` itself and checks `phony--procedure-rule-anchor-beginning-p` and
+   `-end-p`.
+2. A mode with no speech backend: no Talon export, no server prompt, no active-rules timer. With
+   it, a public prepared grammar and a hook run when a rule changes. For now Earwig prepares its
+   own (`phony--prepare-grammar`) and advises `phony-request-export` to know when to do it again.
 3. A public pattern that accepts a word only if a test passes, for digits like "42"
    (`phony-parser--guard` exists internally). The alternative is to check in Earwig's ranking.
-4. The literal normalizer out of experimental.
+4. The literal normalizer out of experimental, set per parse or per grammar, and changing it
+   clears the parser's cache. For now Earwig binds `phony-parser--literal-normalizer` and
+   increments `phony-parser--current-generation` itself.
+5. Rules that refer to themselves, directly or through other rules. Phony builds its parsers
+   eagerly, so it can't. For now targets are layered (see "Built in phase 2"), and a part's
+   chain ("the first word of the second sentence in …") is a repeated `earwig--link`, nested
+   afterwards by `earwig--fold-chain`.
+6. Public access to rules and patterns: a grammar's rules, and a rule's name, docstring, pattern,
+   function and kind (procedure, dictionary, open rule), and walking a pattern. Help
+   (`earwig--pattern-help`, `earwig--user-commands`) uses about 15 private `phony-pattern--`
+   functions for that. A function that shows a pattern as text would cover most of it.
+7. A public way to extend `phony-defun` with keywords, or to get a pattern's argument names.
+   `earwig-defcommand` calls `phony--collect-arguments` and `phony--expand-implicit-arguments` to
+   build its `:check`.
+8. Public names for the built-in word and phrase patterns, `phony--builtin-word` and
+   `phony--builtin-phrase`, which `earwig-number`, `earwig-words` and `earwig-text` use.
 
 ## Options considered
 
