@@ -30,7 +30,7 @@ This README covers installing, setting up and using Earwig. The [manual](docs/ma
 
 - macOS
 - Emacs 29.1 or newer
-- [phony.el](https://github.com/ErikPrantare/phony.el) 3.0.0 or newer, from MELPA (installed with Earwig when MELPA is in `package-archives`)
+- [phony.el](https://github.com/ErikPrantare/phony.el) 4.1.0 or newer, from MELPA (installed with Earwig when MELPA is in `package-archives`). Until 4.1.0 is released, install the `earwig-grammar-support` branch of [the fork](https://github.com/thndrbrrr/phony.el), which has the parsing API Earwig needs
 - curl
 - sox (recommended) for recording; or ffmpeg (which doesn't support streaming though)
 - [Orukeet](https://github.com/Oruk-AI/orukeet) with its speech server (requires Python 3.12)
@@ -243,6 +243,8 @@ emacs -Q --batch -L . \
   --eval '(progn (package-initialize) (require (quote phony)))' \
   -l test/earwig-test.el -f ert-run-tests-batch-and-exit
 ```
+
+To test against a checkout of phony.el instead, add `(push "/path/to/phony.el" load-path)` after `(package-initialize)`. Byte-compile it first: uncompiled, the tests take several times as long.
 
 The manual lists the [source files](docs/manual.md#source-files), and [docs/roadmap](docs/roadmap/README.md) what's planned.
 

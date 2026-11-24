@@ -51,9 +51,8 @@
 ;;  8. free text split as early as possible: "replace A with B with C"
 ;;     tries A first.
 ;;
-;; Phony's parser is private, and it has a few other gaps for Earwig's
-;; use; Earwig works around them here, under "Workarounds", until
-;; Phony has them (docs/roadmap/phony-grammar.md, "Upstream requests").
+;; Phony finds the commands that can start at each word of what was
+;; said (`phony-parse-spans'), so the readings aren't multiplied out.
 
 ;;; Code:
 
@@ -79,126 +78,39 @@ one command they're words, as in \"replace and then with so\"."
   :type '(repeat string)
   :group 'earwig)
 
-;;;; Workarounds for what Phony lacks
+;;;; Phony's grammar
 
-;; Each of these is to go once Phony has what it works around.
-;;
-;; - All readings (upstream request 1): `phony-evaluate' picks one at
-;;   random.  Earwig steps Phony's private parser,
-;;   `phony-parser--parser', itself, and evaluates the readings with
-;;   `earwig--evaluate', as `phony--evaluate-ast' only knows the
-;;   grammar exported to Talon.
-;; - No speech backend (request 2): `phony--exported-grammar' is only
-;;   set by an export to Talon, which needs `phony-mode', the Emacs
-;;   server and a timer.  Earwig never turns on `phony-mode', and
-;;   prepares its own copy of the grammar, `earwig--prepared', again
-;;   whenever a rule changes (`phony-request-export' is called then).
-;; - Guarded words (request 3): numbers in digits, "42", match any word
-;;   in `earwig-number', and a reading whose number doesn't parse is
-;;   ruled out when it's evaluated (`earwig--candidates').
-;; - Case (request 4): words are compared lowercased by binding
-;;   `phony-parser--literal-normalizer', the experimental normalizer's
-;;   variable, while parsing, and incrementing
-;;   `phony-parser--current-generation' so Phony's cache is cleared.
-;; - Rules that refer to themselves (request 5): Phony builds its
-;;   parsers eagerly, so it can't.  Targets are layered, and a part's
-;;   chain is a repeated `earwig--link' that `earwig--fold-chain' nests
-;;   (see "Targets").
-;; - Rules and patterns (request 6): help, `earwig--pattern-help' and
-;;   `earwig--user-commands' (earwig-commands.el), reads them with
-;;   Phony's private `phony--' and `phony-pattern--' functions.
-;; - Extending `phony-defun' (request 7): `earwig-defcommand' gets the
-;;   arguments for :check with `phony--collect-arguments' and
-;;   `phony--expand-implicit-arguments'.
-;; - Built-in patterns (request 8): `earwig-number', `earwig-words' and
-;;   `earwig-text' use the private `phony--builtin-word' and
-;;   `phony--builtin-phrase'.
+(defvar earwig--grammar nil
+  "Phony's grammar as `earwig--grammar' last returned it.")
 
-(defvar earwig--prepared nil
-  "Phony's grammar prepared for parsing, or nil once a rule has changed.
-A plist: :grammar, the prepared grammar; :parser, a parser for one
-interactive rule; :free, a hash table from the names of rules that take
-any words to `phrase' or `word'.")
-
-(defun earwig--grammar-changed (&rest _)
-  "Forget the prepared grammar, as a rule has changed."
-  (setq earwig--prepared nil))
-
-(advice-add 'phony-request-export :before #'earwig--grammar-changed)
-
-(defun earwig--free-kind (rule)
-  "Return `phrase' or `word' if RULE takes any words itself, else nil."
-  (when (phony--procedure-rule-p rule)
-    (let ((builtins (phony-pattern--collect
-                     (lambda (pattern)
-                       (or (phony-pattern--builtin-phrase-p pattern)
-                           (phony-pattern--builtin-word-p pattern)))
-                     (phony--procedure-rule-pattern rule))))
-      (cond ((seq-some #'phony-pattern--builtin-phrase-p builtins) 'phrase)
-            (builtins 'word)))))
-
-(defun earwig--prepared ()
-  "Return Phony's grammar prepared for parsing, see `earwig--prepared'."
-  (or earwig--prepared
-      (let* ((grammar (phony--prepare-grammar phony--default-grammar))
-             (rules (seq-filter (lambda (rule)
-                                  (and (phony--procedure-rule-p rule)
-                                       (phony--procedure-rule-interactive-p rule)))
-                                (phony--get-rules grammar)))
-             (free (make-hash-table :test #'eq)))
-        (dolist (rule (phony--get-rules grammar))
-          (let ((kind (earwig--free-kind rule)))
-            (when kind
-              (puthash (phony--rule-name rule) kind free))))
-        (when (bound-and-true-p earwig-extra-commands)
-          (display-warning 'earwig "`earwig-extra-commands' is no longer used: \
+(defun earwig--grammar ()
+  "Return Phony's grammar of the rules defined now, see `phony-grammar'."
+  (let ((grammar (phony-grammar)))
+    (unless (eq grammar earwig--grammar)
+      (setq earwig--grammar grammar)
+      (when (bound-and-true-p earwig-extra-commands)
+        (display-warning 'earwig "`earwig-extra-commands' is no longer used: \
 voice commands of your own are `phony-defun' rules now, see \"Commands of your own\" \
-in Earwig's manual"))
-        (setq earwig--prepared
-              (list :grammar grammar
-                    :parser (phony-parser--alternative
-                             (mapcar #'phony-parser--parser rules))
-                    :free free)))))
-
-(defun earwig--evaluate (ast grammar)
-  "Return the value of AST, a reading of a rule of the prepared GRAMMAR."
-  (if (atom ast)
-      ast
-    (let* ((type (car ast))
-           (rule (phony--get-rule type grammar)))
-      (cond
-       ((eq type 'list)
-        (mapcar (lambda (arg) (earwig--evaluate arg grammar)) (cdr ast)))
-       ((phony--dictionary-p rule)
-        (phony-dictionary-get (cadr ast) type))
-       ((phony--procedure-rule-p rule)
-        (apply (phony--procedure-rule-function rule)
-               (mapcar (lambda (arg) (earwig--evaluate arg grammar)) (cdr ast))))
-       ((phony--open-rule-p rule)
-        (earwig--evaluate (cadr ast) grammar))
-       (t (error "Can't evaluate the voice command reading %S" ast))))))
+in Earwig's manual")))
+    grammar))
 
 (defmacro earwig--parsing (&rest body)
   "Run BODY, which parses with Phony, comparing words lowercased."
   (declare (indent 0))
-  `(let ((phony-parser--literal-normalizer #'downcase))
-     (cl-incf phony-parser--current-generation)
+  `(let ((phony-literal-normalizer #'downcase))
      ,@body))
 
 (defun earwig--parse-rule (rule text)
   "Return the values of the readings of TEXT as the Phony RULE, a symbol.
 Readings whose value can't be had, as a number that doesn't parse,
 signal their `user-error' if no reading has a value; nil if none reads."
-  (let* ((grammar (plist-get (earwig--prepared) :grammar))
-         (object (phony--get-rule rule grammar))
-         (asts (and object
-                    (earwig--parsing
-                      (phony-parser--parse (phony-parser--parser object)
-                                           (split-string text))))))
+  (let* ((grammar (earwig--grammar))
+         (asts (earwig--parsing
+                 (phony-parse-rule rule (split-string text) grammar))))
     (let (values failed)
       (dolist (ast asts)
         (condition-case err
-            (push (earwig--evaluate ast grammar) values)
+            (push (phony-evaluate-ast ast grammar) values)
           (user-error (setq failed err))))
       (cond (values (nreverse values))
             (failed (signal (car failed) (cdr failed)))))))
@@ -231,8 +143,7 @@ keywords; these go with them:
           (:check (setq check value))
           (:go (setq go value))
           (_ (setq keys (append keys (list key value)))))))
-    (let ((args (phony--collect-arguments
-                 (phony--expand-implicit-arguments (cons 'seq (ensure-list pattern))))))
+    (let ((args (phony-pattern-arguments pattern)))
       `(progn
          (phony-defun ,name ,pattern ,@(and doc (list doc)) ,@keys ,@rest)
          (put ',name 'earwig-help ,help)
@@ -244,24 +155,24 @@ keywords; these go with them:
 
 ;;;; Rules for commands to use
 
-(phony-defun earwig-number ((words (+ phony--builtin-word)))
+(phony-defun earwig-number ((words (+ word)))
   "A number, in digits or words: \"42\", \"forty two\", \"a hundred\".
 Its value is the number, see `earwig-parse-number'; a reading where it
 says no number is ruled out."
   :interactive nil
   (earwig-parse-number (string-join words " ") t))
 
-(phony-defun earwig-words ((words phony--builtin-phrase))
+(phony-defun earwig-words ((words phrase))
   "Words to look for in the buffer; a reading is preferred where they're there."
   :interactive nil
   words)
 
-(phony-defun earwig-text ((text phony--builtin-phrase))
+(phony-defun earwig-text ((text phrase))
   "Free text, as for a search: it goes on to the end, or to `earwig-chain-words'."
   :interactive nil
   text)
 
-;; How each counts as free text in ranking
+;; How the free text in each counts in ranking, see `earwig--ast-free'
 (put 'earwig-number 'earwig-free 'closed)
 (put 'earwig-words 'earwig-free 'checked)
 
@@ -298,13 +209,18 @@ says no number is ruled out."
 ;; ("the second", "the last three", "every", "the third through fifth")
 ;; and an optional filter after it ("with", "starting with", "ending
 ;; with", "without" WORDS).  After a filter only "in" joins, as "of" is
-;; often part of the words.  Phony can't parse a rule that refers to
-;; itself, so the chain is a list, `earwig--link' repeated, which
-;; `earwig--fold-chain' makes into nested specs, each selector the scope
-;; of the one before it.  "the body of", "everything under" and "the
-;; subheadings of" are links too, taking the rest of the chain as their
-;; heading.  Words (WORDS, the next WORDS, A through B, every WORDS) can
-;; only come first, joined by "in".
+;; often part of the words.  The chain, `earwig-part-chain', is a link
+;; (`earwig--link', a selector and the word joining it) followed by the
+;; rest of the chain, the selector's scope.  "the body of", "everything
+;; under" and "the subheadings of" are links too, taking the rest of the
+;; chain as their heading.  Words (WORDS, the next WORDS, A through B,
+;; every WORDS) can only come first, joined by "in".
+;;
+;; Targets made of others take targets of a lower level, which sets how
+;; they group: `earwig--simple-target', then `earwig--one-target' (with
+;; the start or end of a simple target, every WORDS and spans), then
+;; `earwig-target' (with "A and B").  So "the end of A and B" is the end
+;; of A, and B.
 
 (cl-defstruct (earwig-target (:constructor earwig--target-make (spec))
                              (:copier nil))
@@ -373,7 +289,7 @@ for a plural."
   "An ordinal in words, \"first\" to \"twentieth\"; its value is the number."
   (cl-loop for word in earwig--ordinal-words for n from 1 collect (cons word n)))
 
-(phony-defun earwig--ordinal-digits ((word phony--builtin-word))
+(phony-defun earwig--ordinal-digits (word)
   "An ordinal in digits, as \"21st\"; a reading where it's another word is ruled out."
   :interactive nil
   (if (string-match "\\`\\([0-9]+\\)\\(?:st\\|nd\\|rd\\|th\\)\\'" word)
@@ -487,25 +403,23 @@ the rest of the chain as their heading."
         (under (earwig--target-make '(under nil)))
         (subheadings (earwig--target-make '(subheadings nil)))))
 
-(defun earwig--fold-chain (links last)
-  "Return the target of LINKS, from `earwig--link', and LAST, each the
-scope of the one before."
-  (let ((scope last))
-    (dolist (link (reverse links) scope)
-      (let ((spec (copy-sequence (earwig-target-spec link))))
-        (if (eq (car spec) 'units)
-            (setf (nth 4 spec) scope)
-          (setf (nth 1 spec) scope))
-        (setq scope (earwig--target-make spec))))))
+(defun earwig--in-scope (link scope)
+  "Return the target LINK, from `earwig--link', with SCOPE as its scope."
+  (let ((spec (copy-sequence (earwig-target-spec link))))
+    (if (eq (car spec) 'units)
+        (setf (nth 4 spec) scope)
+      (setf (nth 1 spec) scope))
+    (earwig--target-make spec)))
 
-(phony-defun earwig-part-chain ((links (* earwig--link))
-                                (last (| earwig--selector earwig--selector-filtered
-                                         earwig-part-region earwig-part-that earwig-part-buffer
-                                         earwig-part-parent earwig-part-subheadings)))
+(phony-defun earwig-part-chain ((| (seq (link earwig--link) (scope earwig-part-chain))
+                                   (last (| earwig--selector earwig--selector-filtered
+                                            earwig-part-region earwig-part-that
+                                            earwig-part-buffer earwig-part-parent
+                                            earwig-part-subheadings))))
   "A part of the buffer, each selector in the next: \"this paragraph\",
 \"the first word of the second sentence in the section with budget\"."
   :contributes-to earwig-part
-  (earwig--fold-chain links last))
+  (if link (earwig--in-scope link scope) last))
 
 (phony-defun earwig-target-part ((part earwig-part))
   "A part of the buffer."
@@ -676,71 +590,61 @@ inside one, as in \"init.el\", doesn't."
   greedy free signature separator user
   cost)                                 ; static cost of the best path on
 
-(defun earwig--ast-free (ast free)
+(defun earwig--ast-free (ast word phrase)
   "Return (WORDS SIGNATURE GREEDY) for the free text in AST.
-FREE is the prepared grammar's :free.  WORDS counts the words, SIGNATURE
-lists them per stretch of free text; GREEDY is non-nil if some of it
-can't be checked, so runs to the end."
+WORD and PHRASE are the names of the rules that provide Phony's `word'
+and `phrase', which match any words.  WORDS counts the words of free
+text, SIGNATURE lists them per stretch of it; GREEDY is non-nil if some
+of it can't be checked, so runs to the end.  The words in a rule with
+the `earwig-free' property `closed' don't count, and those in one with
+`checked' aren't greedy."
   (let ((words 0) signature greedy)
-    (cl-labels ((walk (node)
+    (cl-labels ((walk (node how)
                   (when (consp node)
-                    (let ((kind (gethash (car node) free))
-                          (how (get (car node) 'earwig-free)))
+                    (let ((how (or (get (car node) 'earwig-free) how)))
                       (cond
                        ((eq how 'closed))
-                       (kind
+                       ((memq (car node) (list word phrase))
                         (let ((count (length (split-string
                                               (mapconcat (lambda (x) (if (stringp x) x ""))
                                                          (flatten-tree (cdr node)) " ")))))
                           (cl-incf words count)
                           (push count signature)
-                          (when (and (eq kind 'phrase) (not (eq how 'checked)))
+                          (when (and (eq (car node) phrase) (not (eq how 'checked)))
                             (setq greedy t))))
-                       (t (mapc #'walk (cdr node))))))))
-      (walk ast))
+                       (t (dolist (child (cdr node))
+                            (walk child how))))))))
+      (walk ast nil))
     (list words (nreverse signature) greedy)))
 
-(defun earwig--candidates (tokens prepared)
+(defun earwig--candidates (tokens grammar)
   "Return a vector: for each position in TOKENS, the commands that start there.
-Each is an `earwig--candidate', its arguments evaluated.  PREPARED is
-from `earwig--prepared'."
+Each is an `earwig--candidate', its arguments evaluated.  GRAMMAR is
+Phony's, from `earwig--grammar'."
   (let* ((n (length tokens))
-         (words (mapcar #'car tokens))
-         (grammar (plist-get prepared :grammar))
-         (free (plist-get prepared :free))
+         (spans (earwig--parsing
+                  (phony-parse-spans (mapcar #'car tokens) grammar)))
+         (word (phony-interface-provider 'word grammar))
+         (phrase (phony-interface-provider 'phrase grammar))
          (table (make-vector (1+ n) nil)))
-    (earwig--parsing
-      (dotimes (start n)
-        (let ((parser (plist-get prepared :parser))
-              (rest (nthcdr start words))
-              (pos start)
-              found)
-          (while (and rest (not (phony-parser--empty-p parser)))
-            (setq parser (phony-parser--step parser (pop rest)))
-            (cl-incf pos)
-            (dolist (ast (phony-parser--parses parser))
-              (unless (member (cons pos ast) found)
-                (push (cons pos ast) found))))
-          (dolist (entry (nreverse found))
-            (pcase-let* ((`(,end . ,ast) entry)
-                         (rule (phony--get-rule (car ast) grammar))
-                         (`(,count ,signature ,greedy) (earwig--ast-free ast free))
-                         (values nil)
-                         (error nil))
-              (condition-case err
-                  (setq values (mapcar (lambda (arg) (earwig--evaluate arg grammar))
-                                       (cdr ast)))
-                (error (setq error (error-message-string err))))
-              (when (and (or (not (phony--procedure-rule-anchor-beginning-p rule)) (= start 0))
-                         (or (not (phony--procedure-rule-anchor-end-p rule)) (= end n)))
-                (push (earwig--candidate-make
-                       :start start :end end :ast ast :rule (car ast)
-                       :values values :error error
-                       :greedy greedy :free count :signature signature
-                       :separator (get (car ast) 'earwig-separator)
-                       :user (not (memq (car ast) earwig--commands)))
-                      (aref table start))))))
-        (setf (aref table start) (nreverse (aref table start)))))
+    (dotimes (start n)
+      (aset table start
+            (mapcar
+             (pcase-lambda (`(,end ,ast ,_cost))
+               (pcase-let ((`(,count ,signature ,greedy) (earwig--ast-free ast word phrase))
+                           (values nil)
+                           (error nil))
+                 (condition-case err
+                     (setq values (mapcar (lambda (arg) (phony-evaluate-ast arg grammar))
+                                          (cdr ast)))
+                   (error (setq error (error-message-string err))))
+                 (earwig--candidate-make
+                  :start start :end end :ast ast :rule (car ast)
+                  :values values :error error
+                  :greedy greedy :free count :signature signature
+                  :separator (get (car ast) 'earwig-separator)
+                  :user (not (memq (car ast) earwig--commands)))))
+             (aref spans start))))
     table))
 
 (defun earwig--chain-starts (tokens)
@@ -886,10 +790,10 @@ Nil if it doesn't read.  TEXT is read as said, then with
 `earwig-corrections-commands' applied; READ is the one that reads.
 STATIC is for `earwig--plan'."
   (earwig--sync-chain-words)
-  (let ((prepared (earwig--prepared)))
+  (let ((grammar (earwig--grammar)))
     (cl-some (lambda (text)
                (let* ((tokens (earwig--tokens text))
-                      (table (and tokens (earwig--candidates tokens prepared)))
+                      (table (and tokens (earwig--candidates tokens grammar)))
                       (best (and tokens (earwig--plan tokens table static))))
                  (and best (aref best 0) (list tokens table best text))))
              (delete-dups (list text (earwig-apply-corrections text t))))))
@@ -935,13 +839,13 @@ As for `earwig-find-commands'."
 For one defined with :go that moves point, \"go back\" returns to where
 point was; not for \"next one\" after \"select WORDS\"."
   (let* ((rule (earwig--candidate-rule candidate))
-         (object (phony--get-rule rule (plist-get (earwig--prepared) :grammar)))
          (from (point-marker)))
     (unwind-protect
         (progn
           (when (earwig--candidate-error candidate)
             (user-error "%s" (earwig--candidate-error candidate)))
-          (apply (phony--procedure-rule-function object) (earwig--candidate-values candidate))
+          (apply (phony-rule-function rule (earwig--grammar))
+                 (earwig--candidate-values candidate))
           (when (and (get rule 'earwig-go)
                      (eq (marker-buffer from) (current-buffer))
                      (/= from (point))
@@ -973,7 +877,7 @@ does, leaves the rest to run there."
          ;; The commands a buffer has can differ by mode
          (unless (eq major-mode mode)
            (setq mode major-mode
-                 table (earwig--candidates tokens (earwig--prepared))
+                 table (earwig--candidates tokens (earwig--grammar))
                  best (earwig--plan tokens table)))
          (let ((candidate (car (earwig--rank (aref table pos) t))))
            (if (null candidate)
@@ -1008,7 +912,7 @@ don't read (yet), or nil.  The most is read that doesn't take more of
 then cu\" the last word doesn't read yet."
   (earwig--sync-chain-words)
   (let* ((tokens (earwig--tokens text))
-         (table (and tokens (earwig--candidates tokens (earwig--prepared))))
+         (table (and tokens (earwig--candidates tokens (earwig--grammar))))
          (n (length tokens))
          (limit (cl-loop with chosen = nil and chains = nil
                          for limit from n downto 1

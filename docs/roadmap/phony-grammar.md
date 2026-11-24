@@ -4,7 +4,8 @@
 found without "and then" and ranked over all readings, as below under "Built in phase 1". Phase 2
 (earwig-edit.el, earwig-move.el): the new targets and the commands taken from cursorfree, as below
 under "Built in phase 2". Phase 3 (hatty) is not built. The background below describes Earwig
-before phase 1.
+before phase 1, and phony.el 3.0.0. The workarounds for what Phony lacked are gone: Earwig uses a
+public API proposed to Phony instead, see "Upstream changes".
 
 Earwig matched its voice commands with regular expressions
 and resolved their targets with hand-written parsing. The idea is to define all commands,
@@ -15,9 +16,9 @@ Commands would be found in an utterance
 without needing "and then" between them. Feature parity is a requirement. Where parity isn't easily
 achievable, only minor changes in how Earwig is used are acceptable.
 
-The plan is to try it first (agreed). What Phony lacks is worked around in Earwig for now. The
-user will contact Phony's author once the approach is proven, with the upstream requests below
-as feedback.
+The plan is to try it first (agreed). What Phony lacked was worked around in Earwig at first. The
+approach is proven, and the changes Earwig needs are now a pull request to Phony, see "Upstream
+changes".
 
 ## Background
 
@@ -459,39 +460,25 @@ The preview already marks boundaries (`▶ select budget ▶ cut that`), and "ca
   the first, or on markers, so earlier edits don't shift later ranges. The whole command is one
   undo step.
 
-## Upstream requests (phony.el)
+## Upstream changes (phony.el)
 
-For now Earwig works around these (agreed): it calls the private functions and handles the rest
-itself. The requests go to Phony's author as feedback once the approach is proven, so the
-workarounds should be easy to find and replace later.
+Earwig worked around what Phony lacked by calling its private functions (agreed). The workarounds
+are gone: Earwig needs a phony.el with the public API below instead. It's a pull request to Phony
+from the `earwig-grammar-support` branch of the fork, https://github.com/thndrbrrr/phony.el, and is
+expected in phony.el 4.1.0, which `Package-Requires` names. Phony 4.0.0 had meanwhile dropped Talon
+as the default backend and the server prompt without one, but still prepared its grammar only for an
+export.
 
-1. A public API returning all readings (`phony-parser--parse-utterance` exists, privately),
-   and an evaluator for any prepared grammar (`phony--evaluate-ast` only knows the exported
-   one). To find where commands start and end, Earwig also needs which spans parse: the readings
-   of every prefix from a given word, with rule anchors applied. For now it steps
-   `phony-parser--parser` itself and checks `phony--procedure-rule-anchor-beginning-p` and
-   `-end-p`.
-2. A mode with no speech backend: no Talon export, no server prompt, no active-rules timer. With
-   it, a public prepared grammar and a hook run when a rule changes. For now Earwig prepares its
-   own (`phony--prepare-grammar`) and advises `phony-request-export` to know when to do it again.
-3. A public pattern that accepts a word only if a test passes, for digits like "42"
-   (`phony-parser--guard` exists internally). The alternative is to check in Earwig's ranking.
-4. The literal normalizer out of experimental, set per parse or per grammar, and changing it
-   clears the parser's cache. For now Earwig binds `phony-parser--literal-normalizer` and
-   increments `phony-parser--current-generation` itself.
-5. Rules that refer to themselves, directly or through other rules. Phony builds its parsers
-   eagerly, so it can't. For now targets are layered (see "Built in phase 2"), and a part's
-   chain ("the first word of the second sentence in …") is a repeated `earwig--link`, nested
-   afterwards by `earwig--fold-chain`.
-6. Public access to rules and patterns: a grammar's rules, and a rule's name, docstring, pattern,
-   function and kind (procedure, dictionary, open rule), and walking a pattern. Help
-   (`earwig--pattern-help`, `earwig--user-commands`) uses about 15 private `phony-pattern--`
-   functions for that. A function that shows a pattern as text would cover most of it.
-7. A public way to extend `phony-defun` with keywords, or to get a pattern's argument names.
-   `earwig-defcommand` calls `phony--collect-arguments` and `phony--expand-implicit-arguments` to
-   build its `:check`.
-8. Public names for the built-in word and phrase patterns, `phony--builtin-word` and
-   `phony--builtin-phrase`, which `earwig-number`, `earwig-words` and `earwig-text` use.
+| Request | What was asked | Now |
+|---------|----------------|-----|
+| 1 | All readings, and evaluating them against any grammar; spans that parse as one command, with anchors | `phony-parse`, `phony-parse-rule`, `phony-parse-spans` (spans, costs, anchors applied, duplicates removed) and `phony-evaluate-ast` |
+| 2 | A grammar without a speech backend, kept up to date | `phony-grammar`: prepared on demand, again after a rule, module or provider changes; with errors it warns and keeps the last good grammar. Earwig compares it with `eq` instead of needing a hook |
+| 3 | A pattern accepting a word only if a test passes | Dropped. Earwig keeps checking numbers when it ranks readings: "go to line two point five" then says "Not a whole number", which a reading ruled out while parsing couldn't. It uses no private API for it any more |
+| 4 | The literal normalizer out of experimental, clearing the cache | The user option `phony-literal-normalizer`, bound around a parse; dictionaries follow a change. Each parse starts a new cache generation itself |
+| 5 | Rules that refer to themselves | Allowed when a word comes first (rule references are built lazily); left recursion is a grammar error. A part's chain is now the recursive `earwig-part-chain`, so `earwig--fold-chain` is gone. The layers of targets stay, as they set how "and", "through" and "the end of" group |
+| 6 | Public access to rules and patterns | `phony-interactive-rules`, `phony-rule-documentation`, `phony-rule-pattern` (the pattern as a `phony-defun` form), `phony-rule-function` and `phony-interface-provider` |
+| 7 | A pattern's argument names, for `earwig-defcommand` | `phony-pattern-arguments` |
+| 8 | Public names for the built-in word and phrase patterns | Not needed: Earwig uses Phony's `word` and `phrase` rules, and finds free text by their providers (`phony-interface-provider`) |
 
 ## Options considered
 
@@ -520,7 +507,7 @@ workarounds should be easy to find and replace later.
 
 ## Built in phase 1
 
-- **earwig-grammar.el** holds the workarounds, `earwig-defcommand` (a `phony-defun` with `:help`,
+- **earwig-grammar.el** holds `earwig-defcommand` (a `phony-defun` with `:help`,
   `:check` and `:go`), the shared rules (`earwig-number`, `earwig-words`, `earwig-text`, and the
   open rules `earwig-part` and `earwig-target`), and finding, ranking and running commands. The
   other files define their commands as rules next to the functions they call.
@@ -553,8 +540,7 @@ workarounds should be easy to find and replace later.
 
 ## Built in phase 2
 
-- **Targets** are layered, as Phony can't build a rule that refers to itself (its parsers are built
-  eagerly): `earwig--simple-target` (parts, words, A through B, WORDS in PART, the next WORDS), then
+- **Targets** are layered, which sets how they group: `earwig--simple-target` (parts, words, A through B, WORDS in PART, the next WORDS), then
   `earwig--one-target` (also the start or end of one of those, and every WORDS), then "A and B",
   "both A and B" and "each of A … and B" of those. Parts under a heading ("the body of", "everything
   under", "the subheadings of") take `earwig--heading`, a part that names a heading. Destinations are

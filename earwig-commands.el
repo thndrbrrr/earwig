@@ -469,48 +469,39 @@ With `consult-line' if it's installed, else with isearch."
                    ((> (length left) 30) (format "  %s\n  %-30s %s\n" left "" right))
                    (t (format "  %-30s %s\n" left right)))))))
 
+(defun earwig--pattern-closed-p (pattern)
+  "Non-nil if the Phony PATTERN only matches its own words, without rules."
+  (pcase pattern
+    ((pred stringp) t)
+    ((pred symbolp) nil)
+    (`(,(or 'seq '| '\? '+ '*) . ,parts) (seq-every-p #'earwig--pattern-closed-p parts))
+    (`(,_argument ,sub) (earwig--pattern-closed-p sub))))
+
 (defun earwig--pattern-help (pattern &optional inner)
-  "Return the Phony PATTERN as \"what can I say\" shows it.
-INNER non-nil means it's part of a sequence, so alternatives need
-parentheses."
-  (let ((closed (lambda (pattern)
-                  (not (phony-pattern--collect
-                        (lambda (p) (or (phony-pattern--rule-p p)
-                                        (phony-pattern--builtin-word-p p)
-                                        (phony-pattern--builtin-phrase-p p)))
-                        pattern)))))
-    (cond
-     ((phony-pattern--literal-p pattern) (phony-pattern--literal-string pattern))
-     ((phony-pattern--sequence-p pattern)
-      (let ((parts (phony-pattern--sequence-patterns pattern)))
-        (mapconcat (lambda (part) (earwig--pattern-help part (cdr parts))) parts " ")))
-     ((phony-pattern--optional-p pattern)
-      (format "[%s]" (earwig--pattern-help (phony-pattern--optional-pattern pattern))))
-     ((phony-pattern--alternative-p pattern)
-      (format (if inner "(%s)" "%s")
-              (mapconcat #'earwig--pattern-help
-                         (phony-pattern--alternative-patterns pattern) " | ")))
-     ((phony-pattern--repeat-p pattern)
-      (format "%s..." (earwig--pattern-help (phony-pattern--repeat-pattern pattern) t)))
-     ((phony-pattern--argument-p pattern)
-      (let ((sub (phony-pattern--argument-pattern pattern)))
-        (if (funcall closed sub)
-            (earwig--pattern-help sub inner)
-          (upcase (symbol-name (phony-pattern--argument-name pattern))))))
-     ((phony-pattern--rule-p pattern)
-      (upcase (string-remove-prefix "earwig-" (symbol-name (phony-pattern--rule-name pattern)))))
-     ((phony-pattern--builtin-word-p pattern) "WORD")
-     (t "WORDS"))))
+  "Return the Phony PATTERN, from `phony-rule-pattern', as \"what can I say\"
+shows it.  INNER non-nil means it's part of a sequence, so alternatives
+need parentheses."
+  (pcase pattern
+    ((pred stringp) pattern)
+    ((pred symbolp)
+     (upcase (string-remove-prefix "earwig-" (symbol-name pattern))))
+    (`(seq . ,parts)
+     (mapconcat (lambda (part) (earwig--pattern-help part (cdr parts))) parts " "))
+    (`(\? ,sub) (format "[%s]" (earwig--pattern-help sub)))
+    (`(| . ,alternatives)
+     (format (if inner "(%s)" "%s")
+             (mapconcat #'earwig--pattern-help alternatives " | ")))
+    (`(,(or '+ '*) ,sub) (format "%s..." (earwig--pattern-help sub t)))
+    (`(,argument ,sub)
+     (if (earwig--pattern-closed-p sub)
+         (earwig--pattern-help sub inner)
+       (upcase (symbol-name argument))))))
 
 (defun earwig--user-commands ()
-  "Return the names of the interactive Phony rules that aren't Earwig's."
-  (let ((grammar (plist-get (earwig--prepared) :grammar)))
-    (sort (cl-loop for rule in (phony--get-rules grammar)
-                   when (and (phony--procedure-rule-p rule)
-                             (phony--procedure-rule-interactive-p rule)
-                             (not (memq (phony--rule-name rule) earwig--commands)))
-                   collect (phony--rule-name rule))
-          (lambda (a b) (string< (symbol-name a) (symbol-name b))))))
+  "Return the names of the voice commands that aren't Earwig's.
+Those are the interactive Phony rules of the current buffer."
+  (seq-remove (lambda (name) (memq name earwig--commands))
+              (phony-interactive-rules (earwig--grammar))))
 
 (defun earwig-cmd-help ()
   "List the voice commands.
@@ -546,9 +537,10 @@ Earwig's commands, then the rest, your own."
         (princ "\nYour commands (Phony rules):\n\n")
         (earwig--help-rows
          (mapcar (lambda (name)
-                   (let ((rule (phony--get-rule name phony--default-grammar)))
-                     (list (earwig--pattern-help (phony--procedure-rule-pattern rule))
-                           (car (split-string (or (phony--rule-documentation rule) "") "\n")))))
+                   (list (earwig--pattern-help (phony-rule-pattern name (earwig--grammar)))
+                         (car (split-string (or (phony-rule-documentation name (earwig--grammar))
+                                                "")
+                                            "\n"))))
                  user))))))
 
 (provide 'earwig-commands)
