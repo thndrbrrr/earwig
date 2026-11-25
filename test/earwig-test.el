@@ -2058,6 +2058,11 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
          (earwig--stream-read 0)
          (earwig--stream-levels nil)
          (earwig--stream-quiet 0)
+         (earwig--stream-loud 0)
+         (earwig--stream-speech-end 0)
+         (earwig--stream-provisional-time 0)
+         (earwig--stream-provisional-end 0)
+         (earwig--stream-provisional-duration 0)
          (earwig--stream-curl nil)
          (earwig--last-dictation nil)
          (earwig--mode 'dictate))
@@ -2135,7 +2140,9 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
     (insert "First.\n\nLast.")
     (goto-char 7)
     (earwig-test-streaming
-     (let ((earwig--stream-count 0))
+     (let ((earwig--stream-count 0)
+           ;; Every loud frame is speech, to keep the frames few
+           (earwig-stream-speech-onset 0.03))
        ;; 20 frames measured: quiet ones, then speech with a dip 4 frames back
        (write-region (make-string 19200 0) nil (earwig--stream-raw) nil 'silent)
        (setq earwig--stream-read 19200
@@ -2154,6 +2161,90 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
        (earwig--stream-insert "Two." 0)
        (earwig--stream-insert "Three." 15840)
        (should (equal (buffer-string) "First. Two.\n\nLast. Three."))))))
+
+;;;; Sparing the speech server
+
+(ert-deftest earwig-test-stream-noise-floor ()
+  "Near-silence between words doesn't make every sound speech."
+  (let ((earwig-stream-noise-floor 10))
+    (should-not (earwig--stream-noise (make-list 9 0)))
+    (should (= (earwig--stream-noise (make-list 20 0)) 10))
+    (should (= (earwig--stream-noise (make-list 20 50)) 50))))
+
+(ert-deftest earwig-test-stream-speech-onset ()
+  "Only a sound that stays loud is speech, not a click."
+  (earwig-test-streaming
+   (let ((earwig-stream-speech-onset 0.15)
+         (earwig-stream-speech-ratio 3.0)
+         (frame-end 0))
+     (cl-flet ((frames (level count)
+                 (dotimes (_ count)
+                   (cl-incf frame-end earwig--stream-frame-bytes)
+                   (earwig--stream-frame level 10 frame-end))))
+       ;; A click of 4 frames
+       (frames 5 10)
+       (frames 1000 4)
+       (frames 5 2)
+       (should-not earwig--stream-speech)
+       (should (= earwig--stream-quiet 16))
+       ;; A word: speech from its fifth frame
+       (frames 1000 6)
+       (should earwig--stream-speech)
+       (should (= earwig--stream-quiet 0))
+       (should (= earwig--stream-speech-end frame-end))
+       ;; A click in the pause after it doesn't end the pause
+       (frames 5 10)
+       (frames 1000 3)
+       (should (= earwig--stream-quiet 13))))))
+
+(ert-deftest earwig-test-stream-max-segment-silence ()
+  "A long stretch without speech isn't sent to the server."
+  (with-temp-buffer
+    (set-window-buffer nil (current-buffer))
+    (earwig-test-streaming
+     (let ((earwig--stream-count 0)
+           (earwig-stream-max-segment 1)
+           (earwig-stream-provisional t))
+       ;; 1.5 s of silence
+       (write-region (make-string 48000 0) nil (earwig--stream-raw) nil 'silent)
+       (earwig--stream-measure)
+       (should-not earwig--stream-queue)
+       (should (zerop earwig--stream-count))
+       (should-not earwig--stream-speech)
+       ;; Past 1 s, at frame 34, all but its last half second was dropped
+       (should (= earwig--stream-segment-start (- (* 34 960) 16000)))))))
+
+(ert-deftest earwig-test-stream-provisional-spared ()
+  "Provisional passes need new speech, and back off while the server is slow."
+  (with-temp-buffer
+    (set-window-buffer nil (current-buffer))
+    (earwig-test-streaming
+     (let ((earwig-stream-provisional t)
+           (earwig-stream-provisional-interval 1.0)
+           (earwig-stream-provisional-share 0.5)
+           sent)
+       (write-region (make-string 64000 0) nil (earwig--stream-raw) nil 'silent)
+       (cl-letf (((symbol-function 'earwig--stream-request)
+                  (lambda (_file _callback) (push (float-time) sent))))
+         (setq earwig--stream-speech t)
+         ;; Speech ended before the audio the last pass reached
+         (setq earwig--stream-speech-end 30000
+               earwig--stream-provisional-end 32000)
+         (earwig--stream-maybe-provisional 48000)
+         (should-not sent)
+         ;; New speech since then
+         (setq earwig--stream-speech-end 40000)
+         (earwig--stream-maybe-provisional 48000)
+         (should (= (length sent) 1))
+         ;; The last pass took 1.5 s: none for 3 s after it started
+         (setq earwig--stream-speech-end 60000
+               earwig--stream-provisional-duration 1.5
+               earwig--stream-provisional-time (- (float-time) 2))
+         (earwig--stream-maybe-provisional 64000)
+         (should (= (length sent) 1))
+         (setq earwig--stream-provisional-time (- (float-time) 3.1))
+         (earwig--stream-maybe-provisional 64000)
+         (should (= (length sent) 2)))))))
 
 (defvar evil-local-mode)
 (defvar evil-move-cursor-back)

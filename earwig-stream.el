@@ -44,8 +44,15 @@
 ;; dictation moving on, ends the dictation so far: it's one undo step
 ;; and what \"scratch that\" takes back.
 ;;
+;; Speech is told from the noise by how loud a sound is and how long it
+;; lasts (`earwig-stream-speech-ratio', `earwig-stream-speech-onset'),
+;; so clicks and knocks neither start a segment nor keep one from
+;; ending; audio without speech isn't sent to the server.
+;;
 ;; While you talk, the part since the last pause is transcribed about
-;; every second too and shown as provisional text, in
+;; every second too, if there was speech since the last time, and less
+;; often while the server is slow (`earwig-stream-provisional-share'),
+;; and shown as provisional text, in
 ;; `earwig-provisional', where the segment will go, and with
 ;; `earwig-provisional-command' too when it starts with a wake word.
 ;; An icon leads it, where it goes, as in the mode line: a red dot,
@@ -91,6 +98,24 @@ lower it if pauses are found in the middle of quiet speech, raise it if
 background noise keeps segments from ending."
   :type 'number)
 
+(defcustom earwig-stream-speech-onset 0.15
+  "Seconds a sound must stay loud to count as speech.
+See `earwig-stream-speech-ratio'.  Clicks, knocks and keys typed are
+shorter, so they neither start a segment nor keep one from ending,
+which spares the speech server transcribing them.  It only decides
+whether there is speech: the audio before it is still sent with it.
+Lower it if short words said on their own are missed."
+  :type 'number)
+
+(defcustom earwig-stream-noise-floor 10
+  "Least background noise level assumed, as the RMS of 16-bit samples.
+Speech must be `earwig-stream-speech-ratio' times louder than the
+background noise, or than this if that is quieter.  Microphones with
+noise suppression record near-silence between words, against which the
+faintest sound would count as speech.  Also for
+`earwig-command-auto-stop'."
+  :type 'number)
+
 ;; Shared with earwig.el
 (defvar earwig-input-device)
 (defvar earwig--audio-flowing)
@@ -119,7 +144,19 @@ background noise keeps segments from ending."
   :type 'boolean)
 
 (defcustom earwig-stream-provisional-interval 1.0
-  "Least seconds between the starts of two provisional transcriptions."
+  "Least seconds between the starts of two provisional transcriptions.
+They're further apart while the server is slow, see
+`earwig-stream-provisional-share'."
+  :type 'number)
+
+(defcustom earwig-stream-provisional-share 0.5
+  "Most of the speech server's time provisional transcriptions may take.
+From 0 to 1: at 0.5, a pass that took 1.5 s is followed by the next
+one no sooner than 3 s after it started.  Each pass transcribes the
+segment from its start, so passes take longer as it grows; without
+this, a slow server would transcribe back to back, keeping the CPU
+busy for as long as you speak.  1 for no limit beyond
+`earwig-stream-provisional-interval'."
   :type 'number)
 
 (defcustom earwig-stream-flush-on-key t
@@ -197,6 +234,10 @@ color of `earwig-mode-line-command'."
 (defvar earwig--stream-segment-start 0 "Byte offset where the current segment starts.")
 (defvar earwig--stream-speech nil "Non-nil once the current segment has speech.")
 (defvar earwig--stream-quiet 0 "Frames without speech since the last speech.")
+(defvar earwig--stream-loud 0
+  "Loud frames in a row, up to the last; speech once there are enough.
+See `earwig-stream-speech-onset'.")
+(defvar earwig--stream-speech-end 0 "Byte offset where the last speech frame ends.")
 (defvar earwig--stream-levels nil "Recent frame levels, newest first, for the noise.")
 (defvar earwig--stream-count 0 "Number of segments cut so far.")
 (defvar earwig--stream-queue nil
@@ -223,6 +264,7 @@ once the ones spoken before point moved are in.")
   "Byte offset of the segment the provisional text shown is for, if any.")
 (defvar earwig--stream-provisional-time 0 "When the last provisional pass started.")
 (defvar earwig--stream-provisional-end 0 "Byte offset the last provisional pass reached.")
+(defvar earwig--stream-provisional-duration 0 "Seconds the last provisional pass took.")
 (defvar earwig--stream-provisional-raw nil
   "The transcription of the provisional text shown, and the byte offset it reaches.
 As (RAW . END), for `earwig--stream-flush'.")
@@ -260,6 +302,8 @@ Set by earwig-hold.el once it tells the hold from a tap.")
         earwig--stream-segment-start 0
         earwig--stream-speech nil
         earwig--stream-quiet 0
+        earwig--stream-loud 0
+        earwig--stream-speech-end 0
         earwig--stream-levels nil
         earwig--stream-count 0
         earwig--stream-queue nil
@@ -273,6 +317,7 @@ Set by earwig-hold.el once it tells the hold from a tap.")
         earwig--stream-provisional-for nil
         earwig--stream-provisional-time 0
         earwig--stream-provisional-end 0
+        earwig--stream-provisional-duration 0
         earwig--stream-provisional-raw nil
         earwig--stream-echo nil
         earwig--command-heard nil
@@ -327,11 +372,30 @@ Set by earwig-hold.el once it tells the hold from a tap.")
 
 (defun earwig--stream-noise (&optional levels)
   "Return the background noise level: the quietest tenth of recent frames.
-Those of the streaming dictation, or LEVELS.  Nil until there are
-enough frames to tell."
+Those of the streaming dictation, or LEVELS; no less than
+`earwig-stream-noise-floor'.  Nil until there are enough frames to tell."
   (when (>= (length (or levels earwig--stream-levels)) 10)
     (let ((levels (sort (copy-sequence (or levels earwig--stream-levels)) #'<)))
-      (nth (/ (length levels) 10) levels))))
+      (max earwig-stream-noise-floor (nth (/ (length levels) 10) levels)))))
+
+(defun earwig--stream-onset-frames ()
+  "Return how many loud frames in a row are speech.
+See `earwig-stream-speech-onset'."
+  (max 1 (round (/ earwig-stream-speech-onset 0.03))))
+
+(defun earwig--stream-frame (level noise frame-end)
+  "Tell whether the frame of LEVEL ending at byte FRAME-END is speech.
+Against the background NOISE level.  It is once it's been loud long
+enough (`earwig-stream-speech-onset'): the segment then has speech,
+and the quiet since speech starts over."
+  (if (and noise (> level (* earwig-stream-speech-ratio noise)))
+      (cl-incf earwig--stream-loud)
+    (setq earwig--stream-loud 0))
+  (if (>= earwig--stream-loud (earwig--stream-onset-frames))
+      (setq earwig--stream-speech t
+            earwig--stream-quiet 0
+            earwig--stream-speech-end frame-end)
+    (cl-incf earwig--stream-quiet)))
 
 (defun earwig--stream-measure (&optional final)
   "Measure the audio recorded since last time, cutting segments at pauses.
@@ -353,11 +417,8 @@ With FINAL, also send the rest of the recording as the last segment."
                         ;; About ten seconds of history
                         (when (> (length earwig--stream-levels) 330)
                           (setq earwig--stream-levels (butlast earwig--stream-levels)))
-                        (if (and noise (> level (* earwig-stream-speech-ratio noise)))
-                            (setq earwig--stream-speech t
-                                  earwig--stream-quiet 0)
-                          (cl-incf earwig--stream-quiet))
                         (let ((frame-end (+ earwig--stream-read offset earwig--stream-frame-bytes)))
+                          (earwig--stream-frame level noise frame-end)
                           (cond
                            ((and earwig--stream-speech
                                  (>= earwig--stream-quiet pause-frames))
@@ -367,13 +428,20 @@ With FINAL, also send the rest of the recording as the last segment."
                            ((and earwig-stream-max-segment
                                  (> (- frame-end earwig--stream-segment-start)
                                     (* earwig-stream-max-segment 32000)))
-                            (earwig--stream-cut (earwig--stream-quietest frame-end))
-                            ;; Cut in the middle of speech
-                            (setq earwig--stream-speech t))))))
+                            (if earwig--stream-speech
+                                (progn
+                                  (earwig--stream-cut (earwig--stream-quietest frame-end))
+                                  ;; Cut in the middle of speech
+                                  (setq earwig--stream-speech t))
+                              ;; Nothing said: not worth transcribing.  The
+                              ;; last half second stays, as speech may be
+                              ;; starting in it.
+                              (setq earwig--stream-segment-start (- frame-end 16000))))))))
           (setq earwig--stream-read end)))
       ;; The rest is sent if it has speech; noise alone makes Orukeet
-      ;; invent text.  If no pause was found at all, it's sent anyway, so
-      ;; nothing is lost even when the speech wasn't told from the noise.
+      ;; invent text.  If no segment was cut at all, it's sent anyway, so
+      ;; a short dictation isn't lost even when the speech wasn't told
+      ;; from the noise.
       (when (and final
                  (> (- end earwig--stream-segment-start) 6400)
                  (or earwig--stream-speech (zerop earwig--stream-count)))
@@ -491,8 +559,13 @@ only sent once CALLBACK has run for this one."
                (>= (- end earwig--stream-segment-start) 16000)
                (>= (- end (max earwig--stream-provisional-end earwig--stream-segment-start))
                    3200)
+               ;; with speech since then, not only the pause after it
+               (> earwig--stream-speech-end
+                  (max earwig--stream-provisional-end earwig--stream-segment-start))
                (>= (- (float-time) earwig--stream-provisional-time)
-                   earwig-stream-provisional-interval))
+                   (max earwig-stream-provisional-interval
+                        (/ earwig--stream-provisional-duration
+                           (max earwig-stream-provisional-share 0.01)))))
       (let ((file (expand-file-name "provisional.wav" earwig--stream-dir))
             (start earwig--stream-segment-start))
         (earwig--stream-write-wav file start end)
@@ -500,6 +573,8 @@ only sent once CALLBACK has run for this one."
               earwig--stream-provisional-end end)
         (earwig--stream-request
          file (lambda (ok output)
+                (setq earwig--stream-provisional-duration
+                      (- (float-time) earwig--stream-provisional-time))
                 (when ok
                   (earwig--stream-show-provisional output start end))
                 (earwig--stream-next)))))))
@@ -672,11 +747,17 @@ Whether the audio from END on, measured already, has speech, and how
 long it's been quiet since, is told from the levels measured."
   (let* ((frames (/ (max 0 (- earwig--stream-read end)) earwig--stream-frame-bytes))
          (recent (seq-take earwig--stream-levels frames))
-         (noise (earwig--stream-noise))
-         (speech-p (lambda (level) (and noise (> level (* earwig-stream-speech-ratio noise))))))
+         (noise (earwig--stream-noise)))
     (setq earwig--stream-segment-start end
-          earwig--stream-speech (and (seq-some speech-p recent) t)
-          earwig--stream-quiet (or (cl-position-if speech-p recent) frames))))
+          earwig--stream-speech nil
+          earwig--stream-quiet 0
+          earwig--stream-loud 0)
+    ;; Oldest first, as they were measured
+    (cl-loop for level in (reverse recent)
+             for i downfrom (1- (length recent))
+             do (earwig--stream-frame level noise
+                                      (- earwig--stream-read
+                                         (* i earwig--stream-frame-bytes))))))
 
 (defun earwig--stream-flush (&optional key)
   "Insert the provisional text shown as its segment's final text.
