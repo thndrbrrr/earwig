@@ -4,7 +4,7 @@
 
 ;; Author: thndrbrrr <thndrbrrr@gmail.com>
 ;; Maintainer: thndrbrrr <thndrbrrr@gmail.com>
-;; Version: 0.2.0
+;; Version: 0.3.0
 ;; Package-Requires: ((emacs "29.1") (phony "4.0.0"))
 ;; URL: https://github.com/thndrbrrr/earwig
 ;; Keywords: convenience, multimedia, text, speech, dictation, voice
