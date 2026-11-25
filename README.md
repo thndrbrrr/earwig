@@ -34,7 +34,7 @@ https://github.com/user-attachments/assets/c98e9aa4-047d-4ef0-beb1-6defd6b9202d
 
 - macOS
 - Emacs 29.1 or newer
-- [phony.el](https://github.com/ErikPrantare/phony.el) 3.0.0 or newer, from MELPA (installed with Earwig when MELPA is in `package-archives`)
+- [phony.el](https://github.com/ErikPrantare/phony.el) 4.0.0, from MELPA (installed with Earwig when MELPA is in `package-archives`). Earwig uses some of its internals, so a later version may need a later Earwig
 - curl
 - sox (recommended) for recording; or ffmpeg (which doesn't support streaming though)
 - [Orukeet](https://github.com/Oruk-AI/orukeet) with its speech server (requires Python 3.12)
@@ -247,6 +247,8 @@ emacs -Q --batch -L . \
   --eval '(progn (package-initialize) (require (quote phony)))' \
   -l test/earwig-test.el -f ert-run-tests-batch-and-exit
 ```
+
+To test against a checkout of phony.el instead, add `(push "/path/to/phony.el" load-path)` after `(package-initialize)`. Byte-compile it first: uncompiled, the tests take several times as long.
 
 The manual lists the [source files](docs/manual.md#source-files), and [docs/roadmap](docs/roadmap/README.md) what's planned.
 

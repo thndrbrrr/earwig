@@ -586,6 +586,7 @@ Helpers:
 - `earwig-platform.el`: what differs from one operating system to another
 - `earwig-cleanup.el`: fillers, corrections, spoken punctuation, fitting text in
 - `earwig-grammar.el`: voice commands as a phony.el grammar: finding them in what's said and choosing between readings
+- `earwig-phony.el`: what Earwig needs from phony.el that its public API doesn't have yet
 - `earwig-commands.el`, `earwig-edit.el`: spoken commands; `earwig-edit.el` also has the targets
 - `earwig-move.el`: moving, copying and wrapping text, making room for new headings and items, links, focus
 - `earwig-structure.el`: headings and lists, as commands and in dictation, and joining sentences
