@@ -110,10 +110,13 @@ macOS asks for microphone access the first time Emacs records. If it was denied,
       earwig-hold-release-delay   0.15
       earwig-hold-typing-repeats  3)
 
-;; Streaming: pauses depend on the microphone, the rest on the CPU
+;; Streaming: pauses and speech depend on the microphone, the rest on the CPU
 (setq earwig-stream-pause                1.5
       earwig-stream-speech-ratio         3.0
+      earwig-stream-speech-onset         0.15  ; shorter sounds are noise
+      earwig-stream-noise-floor          10
       earwig-stream-provisional-interval 1.0
+      earwig-stream-provisional-share    0.5   ; of the server's time
       earwig-stream-max-segment          15)
 ```
 
