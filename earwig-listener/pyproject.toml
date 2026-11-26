@@ -1,0 +1,27 @@
+[project]
+name = "earwig-listener"
+version = "0.1.0"
+description = "Records the microphone, listens for a wake word, and hands the audio over to Earwig"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "openwakeword>=0.6,<0.7",
+    "sounddevice>=0.4.6",
+    # The last onnxruntime with wheels for Intel Macs
+    "onnxruntime<1.24; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+]
+
+[project.scripts]
+earwig-listener = "earwig_listener.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
