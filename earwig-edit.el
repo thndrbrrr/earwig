@@ -275,8 +275,14 @@ A word comes without the punctuation after it.  A sentence point is at
 the end of counts, also when point is just before its period; one point
 is inside doesn't, so it's those before it.  In evil's normal state the
 character under the cursor counts as before it."
-  (if (equal unit "line")
-      (cons (line-beginning-position (- 1 n)) (line-end-position 0))
+  (cond
+   ((equal unit "line")
+    (cons (line-beginning-position (- 1 n)) (line-end-position 0)))
+   ((equal unit "sentence")
+    (earwig--sentences-near
+     n (if (and (earwig--evil-state-p 'normal 'visual) (not (eolp))) (1+ (point)) (point))
+     nil))
+   (t
     (save-excursion
       (when (and (earwig--evil-state-p 'normal 'visual) (not (eolp)))
         (forward-char))
@@ -284,42 +290,78 @@ character under the cursor counts as before it."
           (while (and (not (bobp)) (not (earwig--letter-p (char-before))))
             (backward-char))
         (skip-chars-backward " \t\n"))
-      (when (equal unit "sentence")
-        (let ((end (save-excursion (backward-sentence) (forward-sentence) (point))))
-          (if (string-match-p "[[:alnum:]]" (buffer-substring (point) (max (point) end)))
-              ;; Inside it: the ones before
-              (progn (backward-sentence) (skip-chars-backward " \t\n"))
-            (goto-char (max (point) end)))))
       (let ((end (point)))
         (pcase unit
           ("word" (backward-word n))
-          ("sentence" (backward-sentence n))
           ("paragraph" (backward-paragraph n) (skip-chars-forward " \t\n")))
-        (if (equal unit "word") (earwig--unmarked (point) end) (cons (point) end))))))
+        (if (equal unit "word") (earwig--unmarked (point) end) (cons (point) end)))))))
 
 (defun earwig--next-units (n unit)
   "Return (BEG . END) of the N UNITs (a string) after point.
 Not a sentence point is inside: those after it."
-  (if (equal unit "line")
-      (cons (line-beginning-position 2) (line-end-position (1+ n)))
+  (cond
+   ((equal unit "line")
+    (cons (line-beginning-position 2) (line-end-position (1+ n))))
+   ((equal unit "sentence") (earwig--sentences-near n (point) t))
+   (t
     (save-excursion
       (if (equal unit "word")
           (while (and (not (eobp)) (not (earwig--letter-p (char-after))))
             (forward-char))
         (skip-chars-forward " \t\n"))
-      (when (and (equal unit "sentence")
-                 (string-match-p "[[:alnum:]]"
-                                 (buffer-substring (save-excursion (forward-sentence)
-                                                                   (backward-sentence) (point))
-                                                   (point))))
-        (forward-sentence)
-        (skip-chars-forward " \t\n"))
       (let ((beg (point)))
         (pcase unit
           ("word" (forward-word n))
-          ("sentence" (forward-sentence n))
           ("paragraph" (forward-paragraph n) (skip-chars-backward " \t\n")))
-        (if (equal unit "word") (earwig--unmarked beg (point)) (cons beg (point)))))))
+        (if (equal unit "word") (earwig--unmarked beg (point)) (cons beg (point))))))))
+
+(defun earwig--sentences-near (n pos after)
+  "Return (BEG . END) of the N sentences before POS, or AFTER it.
+Those of the paragraphs (`earwig--blocks') up to the heading before POS,
+or after it: a list item or an Org planning line doesn't run into the
+text after it, and a heading isn't one.  Before POS, the sentence POS is
+at the end of counts, also when it's just before its period; after, the
+one POS is at the start of.  Fewer if there aren't N; signals a
+`user-error' if there's none."
+  (let ((lines 8) found)
+    (while (let* ((from (if after pos (save-excursion (goto-char pos) (forward-line (- lines)) (point))))
+                  (to (if after (save-excursion (goto-char pos) (forward-line lines) (point)) pos))
+                  (blocks (earwig--blocks from to))
+                  (heading nil))
+             ;; Only those of this section
+             (if after
+                 (let ((rest (cl-member-if (lambda (block)
+                                             (and (eq (nth 2 block) 'heading) (> (car block) pos)))
+                                           blocks)))
+                   (setq heading (and rest t)
+                         blocks (butlast blocks (length rest))))
+               (let ((rest (cl-member-if (lambda (block)
+                                           (and (eq (nth 2 block) 'heading) (<= (cadr block) pos)))
+                                         (reverse blocks))))
+                 (setq heading (and rest t)
+                       blocks (nthcdr (length rest) blocks))))
+             (let ((sentences (cl-loop for (beg end kind) in blocks
+                                       unless (eq kind 'heading)
+                                       append (earwig--block-sentences beg end))))
+               (setq found (if after
+                               (cl-remove-if (pcase-lambda (`(,beg ,_))
+                                               (and (< beg pos)
+                                                    (string-match-p "[[:alnum:]]"
+                                                                    (buffer-substring beg pos))))
+                                             sentences)
+                             (cl-remove-if (pcase-lambda (`(,_ ,end))
+                                             (and (> end pos)
+                                                  (string-match-p "[[:alnum:]]"
+                                                                  (buffer-substring pos end))))
+                                           sentences))))
+             (and (< (length found) n)
+                  (not heading)
+                  (if after (< to (point-max)) (> from (point-min)))
+                  (setq lines (* 2 lines)))))
+    (setq found (if after (seq-take found n) (last found n)))
+    (unless found
+      (user-error "No %s sentence in this section" (if after "later" "earlier")))
+    (cons (car (car found)) (cadr (car (last found))))))
 
 ;; The text that went in last, for "that": dictation sets
 ;; `earwig--last-dictation' (earwig.el), commands that put text in call
@@ -926,6 +968,14 @@ With PARAGRAPHS, a list is one, see `earwig--paragraph-blocks'."
         (save-excursion (and (progn (goto-char beg) (bolp)) (progn (goto-char end) (eolp))))
         nil "paragraph"))
 
+(defun earwig--sentence-end-base ()
+  "Return `sentence-end-base' for this buffer.
+In Org and Markdown, emphasis that closes after the punctuation is part
+of the sentence, as in *Done.*"
+  (cond ((derived-mode-p 'org-mode) (concat sentence-end-base "[*_/=~+]*"))
+        ((derived-mode-p 'markdown-mode) (concat sentence-end-base "[*_~`]*"))
+        (t sentence-end-base)))
+
 (defun earwig--block-sentences (beg end)
   "Return (BEG END) of each sentence of the paragraph from BEG to END."
   (earwig--cached
@@ -935,7 +985,8 @@ With PARAGRAPHS, a list is one, see `earwig--paragraph-blocks'."
        (save-restriction
          (narrow-to-region beg end)
          (goto-char beg)
-         (let (sentences)
+         (let ((sentence-end-base (earwig--sentence-end-base))
+               sentences)
            (while (progn (skip-chars-forward " \t\n") (< (point) end))
              (let ((start (point)))
                (forward-sentence)
@@ -1686,15 +1737,82 @@ lines, the next word gets it."
                           (looking-at-p "[[:lower:]]"))))
           (upcase-region (point) (1+ (point))))))))
 
+(defconst earwig--empty-pairs
+  '(("(" . ")") ("[" . "]") ("{" . "}") ("\"" . "\"") ("'" . "'")
+    ("“" . "”") ("‘" . "’") ("«" . "»") ("„" . "“") ("‚" . "‘"))
+  "Brackets and quotes that go when deleting leaves nothing between them.")
+
+(defconst earwig--emphasis-markers
+  '((org-mode "*" "/" "_" "=" "~" "+")
+    (markdown-mode "**" "__" "~~" "*" "_" "`"))
+  "Emphasis markers in each mode, longest first.")
+
+(defun earwig--tidy-empty-pairs (pos)
+  "Delete emphasis, brackets and quotes left around nothing at POS.
+As the \"__\" that cutting all of \"_unveil it_\" leaves; spaces count
+as nothing.  From the inside out, as in (\"\").  Return where POS is
+then."
+  (let ((markers (cdr (cl-find-if (lambda (mode) (derived-mode-p (car mode)))
+                                  earwig--emphasis-markers)))
+        (found t))
+    (cl-flet ((at-p (pos string)
+                (let ((end (+ pos (length string))))
+                  (and (<= (point-min) pos) (<= end (point-max))
+                       (equal (buffer-substring pos end) string)))))
+      (save-excursion
+        (while found
+          (let ((beg (progn (goto-char pos) (skip-chars-backward " \t") (point)))
+                (end (progn (goto-char pos) (skip-chars-forward " \t") (point))))
+            (setq found
+                  (or (cl-loop for marker in markers
+                               for open = (- beg (length marker))
+                               for close = (+ end (length marker))
+                               thereis (and (at-p open marker)
+                                            (at-p end marker)
+                                            ;; Not inside words, as in snake_case
+                                            (not (earwig--letter-p (char-before open)))
+                                            (not (earwig--letter-p (char-after close)))
+                                            (cons open close)))
+                      (cl-loop for (open . close) in earwig--empty-pairs
+                               thereis (and (at-p (- beg (length open)) open)
+                                            (at-p end close)
+                                            (cons (- beg (length open)) (+ end (length close)))))))
+            (when found
+              (delete-region (car found) (cdr found))
+              (setq pos (car found)))))))
+    pos))
+
+(defun earwig--tidy-punctuation (pos)
+  "Drop a comma, semicolon or colon at POS that deleting left before more.
+As \"loud,.\" left from \"loud, because they cried.\": the stronger
+one stays, as the period there, or a closing parenthesis, or the first
+of two commas."
+  (save-excursion
+    (goto-char pos)
+    (let ((rank (lambda (char)
+                  (cond ((memq char '(?. ?! ?? ?\))) 3)
+                        ((memq char '(?\; ?:)) 2)
+                        ((eq char ?,) 1)))))
+      (when-let* ((before (and (not (bobp)) (funcall rank (char-before))))
+                  (after (and (not (eobp)) (funcall rank (char-after)))))
+        (when (<= before 2)
+          (if (> after before)
+              (delete-char -1)
+            (when (<= after 2)
+              (delete-char 1))))))))
+
 (defun earwig--tidy-gap (pos &optional deleted)
   "Fix the spacing at POS, where text was just deleted.
 With DELETED, the text deleted, the start of a sentence it was is
 tidied too, see `earwig--tidy-sentence-start'; not when something takes
-its place."
+its place.  Emphasis, brackets or quotes left around nothing go (see
+`earwig--tidy-empty-pairs'), and so does a comma left before a period
+or another comma (see `earwig--tidy-punctuation')."
   (save-excursion
-    (goto-char pos)
     (when deleted
-      (earwig--tidy-sentence-start pos deleted))
+      (earwig--tidy-sentence-start pos deleted)
+      (setq pos (earwig--tidy-empty-pairs pos)))
+    (goto-char pos)
     (let ((space '(?\s ?\t)))
       (cond
        ((and (memq (char-before) space) (memq (char-after) space))
@@ -1703,7 +1821,9 @@ its place."
              (or (eolp) (memq (char-after) '(?. ?, ?\; ?: ?! ?? ?\)))))
         (delete-char -1))
        ((and (or (bolp) (eq (char-before) ?\()) (memq (char-after) space))
-        (delete-char 1))))))
+        (delete-char 1))))
+    (when deleted
+      (earwig--tidy-punctuation (point)))))
 
 (defun earwig--done-with-region ()
   "Leave evil's visual state, or deactivate the region."

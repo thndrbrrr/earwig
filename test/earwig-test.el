@@ -730,7 +730,21 @@ One point is inside doesn't: the last and the next are the ones around it."
                     ("last sentence" . "A /moon/. A moon costs more.")))
       (should (equal (earwig-test-command "A moon. A moon costs| more." #'org-mode
                                           (concat "format italic moon in " (car case)))
-                     (cdr case))))))
+                     (cdr case))))
+    ;; Not past a planning line or a heading
+    (let ((text "* TODO Laugh\nSCHEDULED: <2026-11-20 Fri>\nLoud, not too loud. It| should be menacing.\n* Next\nMore.\n"))
+      (earwig-test-buffer text #'org-mode
+        (let ((inhibit-message t))
+          (earwig-run-command "select last sentence"))
+        (should (equal (buffer-substring (region-beginning) (region-end)) "Loud, not too loud.")))
+      (should (equal (earwig-test-command text #'org-mode "delete last two sentences")
+                     "* TODO Laugh\nSCHEDULED: <2026-11-20 Fri>\nIt should be menacing.\n* Next\nMore.\n"))
+      (should (equal (earwig-test-command text #'org-mode "delete next two sentences")
+                     "* TODO Laugh\nSCHEDULED: <2026-11-20 Fri>\nLoud, not too loud. It should be menacing.\n* Next\nMore.\n")))
+    ;; A period inside emphasis ends the sentence
+    (should (equal (earwig-test-command "*It is tight.* Mercy| is extra." #'org-mode
+                                        "delete last sentence")
+                   "Mercy is extra."))))
 
 (ert-deftest earwig-test-part-range ()
   "Parts of the buffer give their range, words to look for nil."
@@ -936,6 +950,30 @@ Who pays?
     ;; Nor when dictation takes its place
     (should (equal (earwig-test-command "Yeah! Igor owns it.|" #'text-mode "rewrite yeah")
                    "! Igor owns it."))))
+
+(ert-deftest earwig-test-delete-tidies-leftovers ()
+  "Deleting takes punctuation left doubled, and markup or brackets left around nothing."
+  (let ((sentence-end-double-space nil))
+    (dolist (case '(("Not too loud, because they cried.|" "cut because through cried"
+                     "Not too loud.")
+                    ("Loud, really loud, but quiet.|" "delete really loud"
+                     "Loud, but quiet.")
+                    ("Values: speed, rigor.|" "delete speed" "Values: rigor.")
+                    ("Tea, milk; sugar.|" "delete milk" "Tea; sugar.")
+                    ("Lasers (red, green) here.|" "delete green" "Lasers (red) here.")
+                    ("A (\"premium feature\") ok.|" "delete premium feature" "A ok.")))
+      (should (equal (earwig-test-command (car case) #'text-mode (cadr case))
+                     (caddr case))))
+    (should (equal (earwig-test-command "We agreed to _unveil it on Monday_. Yes.|" #'org-mode
+                                        "cut from unveil through Monday")
+                   "We agreed to. Yes."))
+    (when (require 'markdown-mode nil t)
+      (should (equal (earwig-test-command "We agreed to **unveil it** today.|" #'markdown-mode
+                                          "delete unveil it")
+                     "We agreed to today.")))
+    ;; Markers inside words aren't markup
+    (should (equal (earwig-test-command "Use a_b_c and more.|" #'org-mode "delete and more")
+                   "Use a_b_c."))))
 
 (ert-deftest earwig-test-move ()
   (let ((sentence-end-double-space nil)
