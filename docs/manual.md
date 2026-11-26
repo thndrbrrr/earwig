@@ -193,7 +193,7 @@ The listening is done by [Pincer](https://github.com/thndrbrrr/earwig-pincer), a
 - The command is recorded from 1.5 s before the wake word was heard (`earwig-pincer-pre-roll`), so the wake word and what follows are all there however quickly you say them; what was said before the wake word is dropped. `earwig-pincer-wake-words` says how the wake word is transcribed ("hey jarvis" for the `hey_jarvis` model).
 - It's then a command as one given with a command key: shown in the echo area as you say it, and run at the pause after it, once it's complete (`earwig-pincer-command-pause`, 1 s, or `earwig-command-auto-stop` if that's set). C-g cancels it.
 - While Earwig records or transcribes, the wake word does nothing. While dictating, it works as "okay" does, after a pause.
-- The microphone is open all the time, as the orange indicator on macOS shows. Audio stays on your computer. A Bluetooth headset switches to its low-quality call profile while the microphone is open.
+- The microphone is open all the time, as the orange indicator on macOS shows. Turning `earwig-listen-mode` off closes it, unless Pincer is also the recorder (below); turning `earwig-mode` off always does, and turns listen mode off too. Turning listen mode on turns `earwig-mode` on. Audio stays on your computer. A Bluetooth headset switches to its low-quality call profile while the microphone is open.
 - The pre-trained models are English phrases such as "hey Jarvis" and "alexa"; a wake word of your own needs a model trained for it (`--model path/to/model.onnx`).
 
 #### Recording through Pincer (experimental)
@@ -519,7 +519,7 @@ The speech server is a separate program that does the transcribing; Earwig doesn
 
 Orukeet's `local_server.py` is such a server; the README's setup installs it. Orukeet's [local server guide](https://github.com/Oruk-AI/orukeet/blob/main/examples/local-server.md) has more on it. The server listens on port 8000 unless told otherwise, a common local port, so the README's configuration starts it with `--port 18178`, the port of `earwig-speech-server-base-url`.
 
-**Started by Earwig.** With `earwig-speech-server-command` and `earwig-speech-server-directory` set, `M-x earwig-speech-server-start` runs the server as a subprocess of Emacs. `M-x earwig-speech-server-stop` stops it again, asking it to shut down and killing it after `earwig-speech-server-stop-timeout` seconds (10), and `M-x earwig-speech-server-toggle` does either; `M-x earwig-speech-server-log` shows its output. Dictating while no server answers offers to start it.
+**Started by Earwig.** With `earwig-speech-server-command` and `earwig-speech-server-directory` set, `M-x earwig-speech-server-start` runs the server as a subprocess of Emacs. `M-x earwig-speech-server-stop` stops it again, asking it to shut down and killing it after `earwig-speech-server-stop-timeout` seconds (10), and `M-x earwig-speech-server-toggle` does either; `M-x earwig-speech-server-log` shows its output. Turning on `earwig-mode` starts it, in the background, unless something already answers at `earwig-speech-server-base-url`; Orukeet takes up to about 20 seconds to load. With `earwig-speech-server-autostart` nil it doesn't, and dictating while no server answers offers to start it.
 
 **Started by you.** Or leave `earwig-speech-server-command` unset and start the server yourself, at login with launchd for one; Earwig uses whatever listens at `earwig-speech-server-base-url`. From its directory, that's:
 

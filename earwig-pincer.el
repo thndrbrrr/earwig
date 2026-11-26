@@ -48,6 +48,9 @@
 ;;   dictating, the wake words work as `earwig-wake-words' do, after a
 ;;   pause.  That's with any recorder.
 ;;
+;; Either way, Pincer runs only while `earwig-mode' is on: turning that
+;; off stops it, and with it `earwig-listen-mode'.
+;;
 ;; A recording through the helper is a process, as one by sox is, so the
 ;; rest of Earwig needn't tell them apart: a pipe process with no other
 ;; use stands for it, live while it records.  Stopping it
@@ -123,13 +126,15 @@ used instead when set."
 ;;;; Pincer process
 
 (defun earwig-pincer--wanted-p ()
-  "Non-nil if Pincer should run: it records, or listens for its wake word."
-  (or (bound-and-true-p earwig-listen-mode)
-      (and (bound-and-true-p earwig-mode) (eq (earwig--recorder) 'pincer))))
+  "Non-nil if Pincer should run: it records, or listens for its wake word.
+Only while `earwig-mode' is on, so turning that off closes the microphone."
+  (and (bound-and-true-p earwig-mode)
+       (or (bound-and-true-p earwig-listen-mode)
+           (eq (earwig--recorder) 'pincer))))
 
 (defun earwig-pincer-update ()
   "Start Pincer if it's wanted and not running; stop it if it's not wanted.
-It's wanted with `earwig-listen-mode', or `earwig-mode' with the
+It's wanted while `earwig-mode' is on, with `earwig-listen-mode' or the
 `pincer' recorder."
   (cond
    ((not (earwig-pincer--wanted-p))
@@ -168,9 +173,13 @@ Signal an error if it isn't ready in 30 seconds."
   earwig-pincer--process)
 
 (defun earwig-pincer--quit ()
-  "Stop Pincer."
-  (when (process-live-p earwig-pincer--process)
-    (process-send-eof earwig-pincer--process)))
+  "Stop Pincer: close its input, and kill it if it hasn't exited in 3 s."
+  (let ((proc earwig-pincer--process))
+    (when (process-live-p proc)
+      (process-send-eof proc)
+      (run-at-time 3 nil (lambda ()
+                           (when (process-live-p proc)
+                             (delete-process proc)))))))
 
 (defun earwig-pincer--send (command)
   "Send Pincer COMMAND, an alist."
@@ -298,15 +307,23 @@ Return nil, or what went wrong."
 ;;;###autoload
 (define-minor-mode earwig-listen-mode
   "Listen for a wake word, and give the voice command said after it.
-Starts `earwig-pincer-command', which keeps the microphone open.
-See `earwig-pincer-wake-words'."
+Starts `earwig-pincer-command', which keeps the microphone open.  Goes
+with `earwig-mode': turning this on turns that on, and turning that off
+turns this off.  Turned off, Pincer stops, unless it's the recorder
+\(`earwig-recorder').  See `earwig-pincer-wake-words'."
   :global t
   :group 'earwig-pincer
   (condition-case err
       (progn
+        (when (and earwig-listen-mode (not (bound-and-true-p earwig-mode)))
+          ;; Its body updates Pincer
+          (earwig-mode 1))
         (earwig-pincer-update)
-        (when (and earwig-listen-mode earwig-pincer--ready)
-          (message "Listening for %s" (string-join earwig-pincer-wake-words " or "))))
+        (cond
+         ((and earwig-listen-mode earwig-pincer--ready)
+          (message "Listening for %s" (string-join earwig-pincer-wake-words " or ")))
+         ((and (not earwig-listen-mode) (earwig-pincer--wanted-p))
+          (message "Pincer keeps the microphone open, as `earwig-recorder'"))))
     (error
      (setq earwig-listen-mode nil)
      (signal (car err) (cdr err)))))

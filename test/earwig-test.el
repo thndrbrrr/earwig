@@ -1494,7 +1494,8 @@ First we plan it.
 
 (ert-deftest earwig-test-mode ()
   (let ((dictate (caar earwig-toggle-keys))
-        (correct (car earwig-correct-keys)))
+        (correct (car earwig-correct-keys))
+        (earwig-speech-server-autostart nil))
     (unwind-protect
         (progn
           (earwig-mode -1)
@@ -1949,6 +1950,34 @@ hw:CARD=PCH,DEV=0
     (should-error (earwig-speech-server-start) :type 'user-error)
     (should-not (earwig--check-server-command))))
 
+(ert-deftest earwig-test-server-autostart ()
+  "Turning on `earwig-mode' starts the server, unless told not to."
+  (let ((started 0)
+        (earwig-speech-server-command '("server"))
+        (earwig-server--process nil))
+    (cl-letf (((symbol-function 'earwig-speech-server-start) (lambda () (cl-incf started)))
+              ((symbol-function 'earwig-server--port-in-use-p) #'ignore))
+      (unwind-protect
+          (progn
+            (let ((earwig-speech-server-autostart nil))
+              (earwig-mode -1)
+              (earwig-mode 1)
+              (should (= started 0)))
+            (let ((earwig-speech-server-autostart t))
+              (earwig-mode -1)
+              (earwig-mode 1)
+              (should (= started 1))
+              ;; Not when one answers already
+              (cl-letf (((symbol-function 'earwig-server--port-in-use-p) (lambda () t)))
+                (earwig-mode -1)
+                (earwig-mode 1)
+                (should (= started 1)))
+              (let ((earwig-speech-server-command nil))
+                (earwig-mode -1)
+                (earwig-mode 1)
+                (should (= started 1)))))
+        (earwig-mode -1)))))
+
 ;;;; Streaming through the server
 
 (ert-deftest earwig-test-stream-fallback ()
@@ -2379,8 +2408,45 @@ earwig-pincer on the path."
             (should (member "stopped" (member "end" events)))))
       (advice-remove 'earwig-pincer--event record)
       (earwig-listen-mode -1)
+      (earwig-mode -1)
       (delete-directory dir t))))
 
+(ert-deftest earwig-test-listen-goes-with-earwig-mode ()
+  "Pincer runs only while `earwig-mode' is on, which listen mode goes with."
+  (skip-unless (and (executable-find "sox") (earwig-test-pincer-program)))
+  (let* ((dir (make-temp-file "earwig-test-" t))
+         (wav (expand-file-name "silence.wav" dir))
+         (earwig-pincer-command (list (earwig-test-pincer-program) "--input" wav "--realtime"))
+         (earwig-input-device "default")
+         (earwig-speech-server-autostart nil)
+         (earwig-recorder 'sox)
+         (inhibit-message t)
+         (exited (lambda ()
+                   (earwig-test-wait 10 "Pincer didn't exit"
+                                     (lambda () (not (process-live-p earwig-pincer--process)))))))
+    (unwind-protect
+        (progn
+          (call-process "sox" nil nil nil "-n" "-r" "16000" "-c" "1" "-b" "16" wav "trim" "0" "60")
+          (earwig-mode -1)
+          ;; Listen mode brings earwig-mode, and turning that off ends both
+          (earwig-listen-mode 1)
+          (should earwig-mode)
+          (should (process-live-p earwig-pincer--process))
+          (earwig-mode -1)
+          (should-not earwig-listen-mode)
+          (funcall exited)
+          ;; As the recorder, Pincer outlives listen mode, but not earwig-mode
+          (let ((earwig-recorder 'pincer))
+            (earwig-mode 1)
+            (earwig-listen-mode 1)
+            (earwig-listen-mode -1)
+            (sleep-for 0.5)
+            (should (process-live-p earwig-pincer--process))
+            (earwig-mode -1)
+            (funcall exited)))
+      (earwig-listen-mode -1)
+      (earwig-mode -1)
+      (delete-directory dir t))))
 
 (defmacro earwig-test-with-pincer-recording (text &rest body)
   "Run BODY with the `pincer' recorder reading speech of TEXT made by say.

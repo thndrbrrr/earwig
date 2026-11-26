@@ -33,7 +33,8 @@
 ;;
 ;; With `earwig-speech-server-command', `earwig-speech-server-start'
 ;; runs the server as an Emacs subprocess, so speech recognition only
-;; uses CPU and memory while it's wanted.  Without it, start the server
+;; uses CPU and memory while it's wanted.  `earwig-mode' starts it, in
+;; the background, unless `earwig-speech-server-autostart' is nil.  Without it, start the server
 ;; yourself, e.g. at login.  `earwig-check-setup' checks either way.
 
 ;;; Code:
@@ -77,6 +78,13 @@ installed in ~/.local/share/orukeet:
 (defcustom earwig-speech-server-directory nil
   "Directory `earwig-speech-server-command' runs in, or nil for the home directory."
   :type '(choice (const :tag "Home directory" nil) directory))
+
+(defcustom earwig-speech-server-autostart t
+  "Non-nil to start the speech server as `earwig-mode' is turned on.
+With `earwig-speech-server-command', unless a server already answers
+at `earwig-speech-server-base-url'.  It loads in the background.  With
+nil, recording while no server answers offers to start it."
+  :type 'boolean)
 
 (defcustom earwig-speech-server-stop-timeout 10
   "Seconds to wait for a clean shutdown before killing the server."
@@ -211,6 +219,18 @@ transcription, or the error, as a string."
         (cancel-timer earwig-server--ready-timer))
       (setq earwig-server--ready-timer (run-at-time 1 1 #'earwig-server--wait-ready))
       (message "Speech server starting...")))))
+
+;;;###autoload
+(defun earwig-speech-server-autostart ()
+  "Start the speech server if it's set to start on its own and isn't running.
+That's with `earwig-speech-server-autostart' and
+`earwig-speech-server-command', when nothing answers at
+`earwig-speech-server-base-url' yet."
+  (when (and earwig-speech-server-autostart
+             earwig-speech-server-command
+             (not (earwig-server-running-p))
+             (not (earwig-server--port-in-use-p)))
+    (earwig-speech-server-start)))
 
 ;;;###autoload
 (defun earwig-speech-server-stop ()

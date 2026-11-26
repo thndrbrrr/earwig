@@ -1035,10 +1035,16 @@ and `earwig-correct-keys'.
       (progn
         (earwig--platform-warn)
         (earwig--bind-keys)
-        (add-hook 'post-self-insert-hook #'earwig--punctuation-typed))
+        (add-hook 'post-self-insert-hook #'earwig--punctuation-typed)
+        (condition-case err
+            (earwig-speech-server-autostart)
+          (error (message "Earwig: %s" (error-message-string err)))))
     (remove-hook 'post-self-insert-hook #'earwig--punctuation-typed)
-    (earwig--hold-end))
-  ;; The `pincer' recorder runs while this mode is on
+    (earwig--hold-end)
+    ;; Wake-word commands go with Earwig
+    (when (bound-and-true-p earwig-listen-mode)
+      (earwig-listen-mode -1)))
+  ;; Pincer runs only while this mode is on
   (when (or (eq (earwig--recorder) 'pincer) (featurep 'earwig-pincer))
     (condition-case err
         (earwig-pincer-update)

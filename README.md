@@ -106,7 +106,7 @@ Alternatively, clone the repository, add its directory to your `load-path`, and 
    .venv/bin/pip install -r local-server-requirements.txt
    ```
 
-   The runtime and model take about 700 MB. With the configuration from [Installation](#installation), Earwig starts the server for you: dictating while no server answers offers to start it, or use `M-x earwig-speech-server-start` (`-stop`, `-toggle`, `-log`). The server's default port, 8000, is a common one, so the configuration starts it on port 18178 instead. To run it yourself, or to use another server, see [The speech server](docs/manual.md#the-speech-server) in the manual.
+   The runtime and model take about 700 MB. With the configuration from [Installation](#installation), Earwig starts the server for you, in the background, as `earwig-mode` is turned on; with `earwig-speech-server-autostart` nil, dictating while no server answers offers to start it instead. Or use `M-x earwig-speech-server-start` (`-stop`, `-toggle`, `-log`). The server's default port, 8000, is a common one, so the configuration starts it on port 18178 instead. To run it yourself, or to use another server, see [The speech server](docs/manual.md#the-speech-server) in the manual.
 
 3. **Keyboard and microphone.** For push-to-talk, holding a key must repeat it rather than show the accent menu (restart Emacs afterwards):
 
@@ -259,6 +259,7 @@ All options are in `M-x customize-group RET earwig RET`. These are the ones most
 | Option                                                           | Default                     | What it does                                                         |
 |------------------------------------------------------------------|-----------------------------|----------------------------------------------------------------------|
 | `earwig-speech-server-command`, `earwig-speech-server-directory` | nil                         | How and where Earwig starts the speech server; nil to start it yourself |
+| `earwig-speech-server-autostart` | t | Start the speech server as `earwig-mode` is turned on; nil to be asked when recording instead |
 | `earwig-speech-server-base-url`                                | `"http://127.0.0.1:18178"`  | Where the speech server listens                                      |
 | `earwig-input-device`                                          | `"default"`                 | The microphone, as named in the system's sound settings              |
 | `earwig-recorder`                                              | `auto`                      | `sox`, `ffmpeg`, `pincer` (experimental, see the manual), or `auto` for sox if it's installed |
