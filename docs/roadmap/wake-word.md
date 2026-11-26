@@ -1,10 +1,78 @@
-# Always-listening wake word (design, not built)
+# Always-listening wake word (partly built)
 
-Nothing in this document exists yet. The microphone would stay open all the time, and saying a
+The helper and a first version of Earwig's side exist (see the two "Built so far" sections). The microphone would stay open all the time, and saying a
 wake word such as "Zelda" would give a command at any moment, without a key, or add a command
 during dictation. A dedicated wake-word detector, openWakeWord, would listen instead of the
 speech server, in one helper process that records the microphone and hands the audio over to
 Earwig at a byte offset when it hears the wake word.
+
+## Built so far: the helper
+
+The helper is built and tested on its own, in [earwig-listener/](../../earwig-listener/README.md),
+a self-contained Python project in this repository until it moves to a repository of its own
+(agreed). It starts with openWakeWord's pre-trained `hey_jarvis`
+model while a "Zelda" model is trained; a custom model goes in with `--model zelda.onnx`.
+
+These were chosen while building it, and settle open questions 1 and 2 below for now; they can
+still change when Earwig's side is built:
+
+- **Earwig runs it as a subprocess and they talk in JSON lines**: events on stdout (`ready`,
+  `flowing`, `wake`, `started`, `stopped`, `end`, `error`), commands on stdin (`start`, `stop`,
+  `quit`). Closing stdin quits it, so it doesn't outlive Emacs.
+- **Positions are bytes of audio since the helper started.** A `wake` event gives the position
+  where the wake word was heard; Earwig answers with `start` and a `from` position in the past,
+  up to `--buffer` (3 s) back, and the recording file holds the audio from there on. Earwig, not
+  the helper, decides whether and from where to record.
+- **It writes only while recording**, so the file doesn't grow while nobody dictates; the ring
+  buffer covers the time before.
+- **Wake words are reported while recording too**, for
+  [commands-without-pause.md](commands-without-pause.md).
+- `--device` takes the names `earwig-input-device` does; `--input file.wav --realtime` stands in
+  for the microphone in tests, as `earwig--stream-input` does for sox.
+
+Measured on the i7-8700B (Python 3.12, openWakeWord 0.6.0, onnxruntime 1.23.2, the last with
+Intel Mac wheels):
+
+- **CPU:** 66 s of real-time listening took 5.7 s of CPU, start-up included: under 9% of one
+  core. Scoring alone was 2.4–3.7% of one core. About 200 MB of memory.
+- **Detection:** "hey Jarvis" said by `say` (Samantha, Daniel) scored 0.96–1.00, first crossing
+  0.5 within 0.06 s of the end of the words. No detection in a minute of pink noise.
+- **Handover:** "This is a sentence before. Hey Jarvis, delete that line.": a recording started
+  1.5 s before the detection came back from Orukeet as "Hey Jarvis, delete that line." So
+  1–1.5 s of audio from before the detection holds the whole wake word.
+
+## Built so far: commands after the wake word
+
+`earwig-listen.el` has a first version of Earwig's side, for commands only (see the manual,
+"Commands after a wake word"). `earwig-listen-mode` starts the helper with
+`earwig-listener-command`; on a `wake` event, unless Earwig is recording or transcribing, it
+records a voice command from `earwig-listener-pre-roll` (1.5 s) before the detection, as a WAV
+file the helper writes (`"format": "wav"`). From there it is a command as one started with a
+command key (`earwig--record` with its WAKE argument): previewed, stopped at the pause after a
+complete command (`earwig-listener-command-pause`, 1 s, or `earwig-command-auto-stop`), and run.
+
+- **The recording is still a process.** Earwig's recording code is built around a recorder
+  process (live while recording, its sentinel acting on the recording). A pipe process stands
+  for the helper's recording: `earwig--stop-recorder` calls its `earwig-stop` property, which
+  sends `stop`; on `stopped` it's deleted, and `earwig--recorder-stopped-p` counts that as
+  stopped, not failed.
+- **What's transcribed up to the wake word is dropped** (`earwig-listen--after-wake-word`,
+  `earwig-listener-wake-words`, "hey jarvis" for now), as the recording starts before it.
+- **The listener's wake words also work while dictating**, after a pause, as "okay" does
+  (`earwig--wake-words`).
+- Keys still record with sox; so question 4 below is still open.
+
+Tested end to end (`earwig-test-listen-command`, with `--input` and `say`): "This is a sentence
+before. Hey Jarvis, delete last word." in a buffer with "One two three" leaves "One two". The
+recording stopped about 2 s after the speech ended (a preview must cover all the speech, then
+the pause), and the command ran about 2.4 s later, after a final transcription queued behind
+the last preview. Since then, a command whose preview covered all of it and stopped the
+recording runs as that preview heard it, without a final transcription
+(`earwig--record-final`): the command now runs within 0.1 s of the recording stopping, about
+1.7–2 s after the speech ends. What's left is the preview that was in flight as the speech
+ended, which the server finishes even when Earwig drops it, then a fresh one of all of it.
+
+Not tested yet: the live microphone, and false detections in everyday speech and media.
 
 ## Background: why not the speech server
 

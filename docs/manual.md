@@ -16,6 +16,7 @@ Earwig is made for writing structured text, prose and notes in Org and Markdown 
   - [How a command is recognized](#how-a-command-is-recognized)
   - [Several commands in a row](#several-commands-in-a-row)
   - [Commands while dictating](#commands-while-dictating)
+  - [Commands after a wake word (experimental)](#commands-after-a-wake-word-experimental)
   - [Editing: a verb and a target](#editing-a-verb-and-a-target)
   - [Formatting](#formatting)
   - [Headings and lists (Org and Markdown)](#headings-and-lists-org-and-markdown)
@@ -175,6 +176,27 @@ You never have to leave dictation to give a command, or a chain of them. While y
 - Dictation follows point. After "okay, go to top", or after you click somewhere else, what you say next goes there, even mid-sentence. What you'd already said before you moved still goes where you said it, where its provisional text showed. Leaving evil's insert state, which moves point back a character, doesn't count as moving.
 - Each stretch of dictation between commands, or before you move, is one undo step, and it's what "scratch that" takes back.
 - The wake words are in `earwig-wake-words` ("okay" and "ok"). To have a dictation key only ever dictate, turn it off: `(setopt earwig-wake-word-commands nil)`.
+
+### Commands after a wake word (experimental)
+
+With `earwig-listen-mode`, the microphone stays open and a wake word gives a command without a key:
+
+> Hey Jarvis, delete last word.
+
+The listening is done by earwig-listener, a helper program in `earwig-listener/` that listens for the wake word with openWakeWord, using a few percent of one core. The speech server only transcribes once it hears the wake word. Set it up as its [README](../earwig-listener/README.md) says, then:
+
+```elisp
+(setopt earwig-listener-command
+        '("uv" "run" "--project" "/path/to/earwig/earwig-listener"
+          "earwig-listener" "--model" "hey_jarvis"))
+(earwig-listen-mode 1)
+```
+
+- The command is recorded from 1.5 s before the wake word was heard (`earwig-listener-pre-roll`), so the wake word and what follows are all there however quickly you say them; what was said before the wake word is dropped. `earwig-listener-wake-words` says how the wake word is transcribed ("hey jarvis" for the `hey_jarvis` model).
+- It's then a command as one given with a command key: shown in the echo area as you say it, and run at the pause after it, once it's complete (`earwig-listener-command-pause`, 1 s, or `earwig-command-auto-stop` if that's set). C-g cancels it.
+- While Earwig records or transcribes, the wake word does nothing. While dictating, it works as "okay" does, after a pause.
+- The microphone is open all the time, as the orange indicator on macOS shows. Audio stays on your computer. A Bluetooth headset switches to its low-quality call profile while the microphone is open.
+- The pre-trained models are English phrases such as "hey Jarvis" and "alexa"; a wake word of your own needs a model trained for it (`--model path/to/model.onnx`).
 
 ### Editing: a verb and a target
 
@@ -660,5 +682,6 @@ Run `M-x earwig-check-setup` first. Beyond what it finds:
 - `earwig-stream.el`: streaming dictation and provisional text
 - `earwig-hold.el`: tap versus hold, and push-to-talk
 - `earwig-check.el`: `M-x earwig-check-setup`
+- `earwig-listen.el`: commands after a wake word, with `earwig-listener/`, the helper that listens for it (experimental)
 - `docs/roadmap/`: what's planned
 - `test/earwig-test.el`: the tests

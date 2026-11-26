@@ -64,6 +64,13 @@
 (declare-function vterm-send-string "vterm" (string &optional paste-p))
 (declare-function eat-term-send-string "eat" (terminal string))
 (declare-function term-send-raw-string "term" (chars))
+;; Here as well as by its cookie, for Earwig loaded from a checkout,
+;; whose autoloads nothing generates
+(autoload 'earwig-listen-mode "earwig-listen"
+  "Listen for a wake word, and give the voice command said after it." t)
+(declare-function earwig-listen--record "earwig-listen" (file from sentinel))
+(declare-function earwig-listen--after-wake-word "earwig-listen" (raw))
+(defvar earwig-listener-command-pause)
 (defvar eat-terminal)
 
 (defcustom earwig-input-device "default"
@@ -103,7 +110,8 @@ a command key, not one pushed to talk, which stops when it's let go.
 What's been said is transcribed while you say it, as for
 `earwig-command-preview' (even with that off); once it's a command, or
 commands chained, or ends with one of `earwig-cancel-words', this
-much silence after it stops the recording.  When it isn't (yet), as
+much silence after it stops the recording, and it runs as that
+transcription has it, without being transcribed again.  When it isn't (yet), as
 in \"go to line\" before its number, recording waits for
 `earwig-command-auto-stop-incomplete' seconds of silence instead.
 Speech is told from the background noise as in streaming dictation,
@@ -275,6 +283,14 @@ that of provisional text for a command given while dictating, unless
 
 (defvar earwig--record-target nil "Marker where its dictation goes.")
 
+(defvar earwig--record-wake nil
+  "Non-nil if the recording is of a command after the listener's wake word.
+Then the listener records it, from that position on (earwig-listen.el).")
+
+(defvar earwig--record-auto-stop nil
+  "Seconds of silence after a complete command that stop the recording, or nil.
+See `earwig-command-auto-stop' and `earwig-listener-command-pause'.")
+
 (defvar earwig--preview-timer nil "Timer transcribing the command being said.")
 (defvar earwig--preview-request nil "The preview's transcription request in flight.")
 (defvar earwig--preview-size 0 "Bytes of audio the last preview was of.")
@@ -290,6 +306,10 @@ See `earwig-command-auto-stop'.")
 (defvar earwig--preview-heard nil
   "The latest transcription of the command being said, as (RAW . BYTES).
 BYTES is how much of its audio RAW is of.")
+(defvar earwig--record-final nil
+  "The command's transcription, if a preview of all of it stopped the recording.
+Then it's acted on as it is, rather than transcribed again; see
+`earwig-command-auto-stop'.")
 
 (defvar earwig--record-cancelled nil
   "Non-nil once the recording is cancelled, so it's dropped when it stops.")
@@ -399,34 +419,42 @@ would hold back its small, frequent progress reports by up to a second."
     (force-mode-line-update t)
     (earwig--log-mic-live)))
 
-(defun earwig--record ()
+(defun earwig--record (&optional wake)
   "Record a dictation or command, transcribed when it stops.
-It goes into the current buffer at point."
+It goes into the current buffer at point.  With WAKE, it's a command
+after the wake word, which the listener records from its position WAKE
+on (earwig-listen.el), and which stops at the pause after it."
   (setq earwig--record-file (make-temp-file "earwig-" nil ".wav")
         earwig--record-target (point-marker)
         earwig--record-cancelled nil
+        earwig--record-wake wake
+        earwig--record-final nil
+        earwig--record-auto-stop (or earwig-command-auto-stop
+                                     (and wake earwig-listener-command-pause))
         earwig--stream-pushed-to-talk nil
         earwig--audio-flowing nil
         earwig--record-start (current-time)
         earwig--record-process
-        (let ((process-adaptive-read-buffering nil))
-          (make-process :name "earwig-record"
-                        :command (earwig--record-command earwig--record-file)
-                        :buffer (generate-new-buffer " *earwig-record*")
-                        ;; On a pty, with sox's progress output, a recording
-                        ;; loses whole seconds
-                        :connection-type 'pipe
-                        :noquery t
-                        :filter #'earwig--recorder-filter
-                        :sentinel #'earwig--record-sentinel)))
-  (when (and (or earwig-command-preview earwig-command-auto-stop)
+        (if wake
+            (earwig-listen--record earwig--record-file wake #'earwig--record-sentinel)
+          (let ((process-adaptive-read-buffering nil))
+            (make-process :name "earwig-record"
+                          :command (earwig--record-command earwig--record-file)
+                          :buffer (generate-new-buffer " *earwig-record*")
+                          ;; On a pty, with sox's progress output, a recording
+                          ;; loses whole seconds
+                          :connection-type 'pipe
+                          :noquery t
+                          :filter #'earwig--recorder-filter
+                          :sentinel #'earwig--record-sentinel))))
+  (when (and (or earwig-command-preview earwig--record-auto-stop)
              (eq earwig--mode 'command))
     (setq earwig--preview-size 0
           earwig--preview-heard nil
           earwig--preview-timer (run-at-time earwig-stream-provisional-interval
                                              earwig-stream-provisional-interval
                                              #'earwig--preview-tick)))
-  (when (and earwig-command-auto-stop (eq earwig--mode 'command))
+  (when (and earwig--record-auto-stop (eq earwig--mode 'command))
     (setq earwig--auto-stop-read 0
           earwig--auto-stop-levels nil
           earwig--auto-stop-speech nil
@@ -446,7 +474,9 @@ It goes into the current buffer at point."
       (cond
        (earwig--record-cancelled
         (earwig--record-done))
-       ((earwig--recorder-stopped-p event)
+       ((and earwig--record-final (earwig--recorder-stopped-p event proc))
+        (earwig--record-transcribed t earwig--record-final))
+       ((earwig--recorder-stopped-p event proc)
         (earwig--show-phase 'transcribing)
         (condition-case err
             (earwig-server-transcribe earwig--record-file #'earwig--record-transcribed)
@@ -470,7 +500,7 @@ It goes into the current buffer at point."
               (message "Nothing heard"))
              (t
               (earwig--follow-point target)
-              (earwig--insert-transcription output target)))
+              (earwig--insert-transcription (earwig--record-heard output) target)))
           (error (message "Inserting dictation failed: %s" (error-message-string err))))
       (earwig--record-done))))
 
@@ -482,7 +512,9 @@ It goes into the current buffer at point."
     (set-marker earwig--record-target nil))
   (setq earwig--record-file nil
         earwig--record-target nil
-        earwig--record-cancelled nil)
+        earwig--record-cancelled nil
+        earwig--record-wake nil
+        earwig--record-final nil)
   (earwig--show-phase nil))
 
 (defun earwig-cancel-recording ()
@@ -532,14 +564,18 @@ Measures the audio recorded since last time, in 30 ms frames.  See
                 (when (and (>= quiet 0.3)
                            (< earwig--preview-size earwig--auto-stop-speech-end))
                   (earwig--preview-tick))
-                (when (or (and (>= quiet earwig-command-auto-stop)
-                               (earwig--command-heard-complete-p))
-                          (and earwig-command-auto-stop-incomplete
-                               (>= quiet earwig-command-auto-stop-incomplete)))
-                  (earwig--auto-stop-cancel)
-                  ;; A tap of the key now starts a new recording
-                  (earwig--hold-end)
-                  (earwig--stop-recorder earwig--record-process)))))
+                (let ((complete (and (>= quiet earwig--record-auto-stop)
+                                     (earwig--command-heard-complete-p))))
+                  (when (or complete
+                            (and earwig-command-auto-stop-incomplete
+                                 (>= quiet earwig-command-auto-stop-incomplete)))
+                    ;; The preview has all of it: no need to transcribe it again
+                    (when complete
+                      (setq earwig--record-final (car earwig--preview-heard)))
+                    (earwig--auto-stop-cancel)
+                    ;; A tap of the key now starts a new recording
+                    (earwig--hold-end)
+                    (earwig--stop-recorder earwig--record-process))))))
         (error (message "Listening for the end of the command failed: %s"
                         (error-message-string err)))))))
 
@@ -551,7 +587,7 @@ ending with one of `earwig-cancel-words'.  See `earwig--preview-heard'."
   (pcase earwig--preview-heard
     (`(,raw . ,bytes)
      (and (>= bytes earwig--auto-stop-speech-end)
-          (let* ((text (earwig-clean raw))
+          (let* ((text (earwig-clean (earwig--record-heard raw)))
                  (text (string-trim (or (earwig--strip-wake-word text) text))))
             (and (or (earwig--strip-cancel-word text)
                      (earwig-commands-complete-p text))
@@ -609,7 +645,15 @@ To show it, with `earwig-command-preview', and for
                                 (process-live-p earwig--record-process))
                        (setq earwig--preview-heard (cons output bytes))
                        (when earwig-command-preview
-                         (earwig--show-command-preview output))))))))))))
+                         (earwig--show-command-preview (earwig--record-heard output)))))))))))))
+
+(defun earwig--record-heard (raw)
+  "Return the transcription RAW of the recording, as it's acted on.
+That's from after the wake word on, for a command after the listener's
+wake word, as the recording starts before it."
+  (if earwig--record-wake
+      (earwig-listen--after-wake-word raw)
+    raw))
 
 (defun earwig--show-command-preview (raw)
   "Show the command RAW, as transcribed so far, in the echo area."

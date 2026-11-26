@@ -160,19 +160,28 @@ place, so stopping the process stops sox."
     (_ earwig-input-device)))
 
 (defun earwig--stop-recorder (proc)
-  "Stop the recorder PROC, so it finishes what it's writing."
-  (if (eq system-type 'windows-nt)
+  "Stop the recorder PROC, so it finishes what it's writing.
+A recorder with an `earwig-stop' property is stopped by calling it with
+PROC; that's the wake-word listener's (earwig-listen.el)."
+  (cond
+   ((process-get proc 'earwig-stop)
+    (funcall (process-get proc 'earwig-stop) proc))
+   ((eq system-type 'windows-nt)
       ;; Windows: untested.  It has no SIGINT, so the recorder is killed,
       ;; which loses what it hasn't written yet; recording a little
       ;; longer first keeps the last word.
       (run-at-time 0.3 nil (lambda ()
                              (when (process-live-p proc)
-                               (delete-process proc))))
-    (interrupt-process proc)))
+                               (delete-process proc)))))
+   (t
+    (interrupt-process proc))))
 
-(defun earwig--recorder-stopped-p (event)
-  "Non-nil if the process EVENT of a recorder is its being stopped, not failing."
+(defun earwig--recorder-stopped-p (event &optional proc)
+  "Non-nil if the process EVENT of a recorder is its being stopped, not failing.
+PROC is the recorder: one with an `earwig-stop' property is deleted once
+stopped, see `earwig--stop-recorder'."
   (or (string-prefix-p "finished" event)
+      (and proc (process-get proc 'earwig-stop) (string-prefix-p "deleted" event))
       (string-prefix-p "interrupt" event)
       ;; ffmpeg's exit status once interrupted
       (string-prefix-p "exited abnormally with code 255" event)

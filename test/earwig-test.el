@@ -1992,7 +1992,7 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
          (earwig--record-file file)
          (earwig--record-process 'recorder)
          (earwig--stream-pushed-to-talk nil)
-         (earwig-command-auto-stop 1.0)
+         (earwig--record-auto-stop 1.0)
          (earwig-command-auto-stop-incomplete 2.0)
          (earwig--auto-stop-timer nil)
          (earwig--auto-stop-read 0)
@@ -2002,6 +2002,8 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
          (earwig--auto-stop-speech-end 0)
          (earwig--preview-size 0)
          (earwig--preview-heard nil)
+         (earwig--record-final nil)
+         (earwig--record-wake nil)
          (speech '((60 . 20) (30 . 3000) (20 . 20) (30 . 3000)))
          (heard (lambda (raw) (setq earwig--preview-heard (cons raw (length audio)))))
          previews stopped)
@@ -2036,14 +2038,19 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
           (funcall heard "Go to top.")
           (earwig--auto-stop-tick)
           (should stopped)
+          ;; and runs as heard, without transcribing it again
+          (should (equal earwig--record-final "Go to top."))
           ;; Nor does a chain word at the end, until the longer pause
-          (setq stopped nil)
+          (setq stopped nil
+                earwig--record-final nil)
           (funcall heard "Select last sentence and then.")
           (earwig--auto-stop-tick)
           (should-not stopped)
           (apply write (append speech '((67 . 20))))
           (earwig--auto-stop-tick)
           (should stopped)
+          ;; It's transcribed again, as the preview isn't the whole command
+          (should-not earwig--record-final)
           ;; A cancel word ends it too
           (should (let ((earwig--preview-heard (cons "Go to, never mind." 1.0e9)))
                     (earwig--command-heard-complete-p)))
@@ -2283,6 +2290,91 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
          (setq earwig--stream-provisional-time (- (float-time) 3.1))
          (earwig--stream-maybe-provisional 64000)
          (should (= (length sent) 2)))))))
+
+(ert-deftest earwig-test-record-final ()
+  "A recording a complete preview stopped runs as heard, not transcribed again."
+  (let ((earwig--record-final "Go to top.")
+        (earwig--record-cancelled nil)
+        (earwig--record-file nil)
+        (earwig--record-target nil)
+        (earwig--record-wake nil)
+        (proc (make-pipe-process :name "earwig-test" :buffer (generate-new-buffer " *test*")
+                                 :noquery t))
+        acted)
+    (delete-process proc)
+    (cl-letf (((symbol-function 'earwig-server-transcribe)
+               (lambda (&rest _) (error "Transcribed again")))
+              ((symbol-function 'earwig--record-transcribed)
+               (lambda (ok output) (setq acted (list ok output)))))
+      (earwig--record-sentinel proc "finished\n"))
+    (should (equal acted '(t "Go to top.")))))
+
+;;;; The wake-word listener
+
+(require 'earwig-listen)
+
+(ert-deftest earwig-test-listen-wake-words ()
+  "The listener's wake words: what's said up to them is dropped."
+  (let ((earwig-listener-wake-words '("hey jarvis" "zelda")))
+    (should (equal (earwig-listen--after-wake-word "Before. Hey, Jarvis! Delete that.")
+                   "Delete that."))
+    (should (equal (earwig-listen--after-wake-word "zelda go to top") "go to top"))
+    ;; Not part of a word
+    (should (equal (earwig-listen--after-wake-word "Zeldas go") "Zeldas go"))
+    (should (equal (earwig-listen--after-wake-word "Delete that.") "Delete that."))
+    ;; They give commands while dictating too, but only while listening
+    (let ((earwig-listen-mode nil))
+      (should-not (earwig--strip-wake-word "Hey Jarvis, delete that")))
+    (let ((earwig-listen-mode t))
+      (should (equal (earwig--strip-wake-word "Hey, Jarvis, delete that") "delete that"))
+      (should (equal (earwig--strip-wake-word "Okay, delete that") "delete that")))))
+
+(ert-deftest earwig-test-listen-command ()
+  "A command said after the wake word runs, without a key."
+  (skip-unless (and (executable-find "sox") (executable-find "say")
+                    (earwig-server-ready-p)))
+  (let* ((listener (expand-file-name "earwig-listener/.venv/bin/earwig-listener"
+                                     (file-name-directory (locate-library "earwig"))))
+         (dir (make-temp-file "earwig-test-" t))
+         (aiff (expand-file-name "speech.aiff" dir))
+         (wav (expand-file-name "speech.wav" dir))
+         (earwig-listener-command (list listener "--input" wav "--realtime"))
+         (earwig-listener-wake-words '("hey jarvis"))
+         (earwig-listener-command-pause 0.8)
+         (earwig-command-auto-stop nil)
+         (earwig-command-preview t)
+         (earwig-input-device "default")
+         (inhibit-message t)
+         (events nil)
+         (record (lambda (event) (push (alist-get 'event event) events))))
+    (skip-unless (file-executable-p listener))
+    (advice-add 'earwig-listen--event :before record)
+    (unwind-protect
+        (progn
+          (call-process "say" nil nil nil "-v" "Samantha" "-o" aiff
+                        "This is a sentence before. [[slnc 600]] Hey Jarvis, delete last word. [[slnc 2500]]")
+          (call-process "sox" nil nil nil aiff "-r" "16000" "-c" "1" "-b" "16" wav)
+          (with-temp-buffer
+            (set-window-buffer nil (current-buffer))
+            (insert "One two three")
+            (earwig-listen-mode 1)
+            (with-timeout (30 (error "The command didn't run"))
+              (while (or (equal (buffer-string) "One two three")
+                         (not (member "end" events)))
+                ;; Batch Emacs on macOS can fail its select() as a
+                ;; subprocess exits; the processes carry on regardless
+                (condition-case err
+                    (sleep-for 0.1)
+                  (file-error
+                   (unless (equal (cadr err) "Failed select")
+                     (signal (car err) (cdr err)))))))
+            (should (equal (buffer-string) "One two"))
+            ;; Stopped at the pause, before the file ran out
+            (should (member "end" events))
+            (should (member "stopped" (member "end" events)))))
+      (advice-remove 'earwig-listen--event record)
+      (earwig-listen-mode -1)
+      (delete-directory dir t))))
 
 (defvar evil-local-mode)
 (defvar evil-move-cursor-back)
