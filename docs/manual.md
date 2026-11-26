@@ -183,12 +183,10 @@ With `earwig-listen-mode`, the microphone stays open and a wake word gives a com
 
 > Hey Jarvis, delete last word.
 
-The listening is done by Pincer, a helper program in `earwig-pincer/` that listens for the wake word with openWakeWord, using a few percent of one core. The speech server only transcribes once it hears the wake word. Set it up as its [README](../earwig-pincer/README.md) says, then:
+The listening is done by [Pincer](https://github.com/thndrbrrr/earwig-pincer), a helper program that listens for the wake word with openWakeWord, using a few percent of one core. The speech server only transcribes once it hears the wake word. Install it as its README says, then:
 
 ```elisp
-(setopt earwig-pincer-command
-        '("uv" "run" "--project" "/path/to/earwig/earwig-pincer"
-          "earwig-pincer" "--model" "hey_jarvis"))
+(setopt earwig-pincer-command '("earwig-pincer" "--model" "hey_jarvis"))
 (earwig-listen-mode 1)
 ```
 
@@ -695,6 +693,6 @@ Run `M-x earwig-check-setup` first. Beyond what it finds:
 - `earwig-stream.el`: streaming dictation and provisional text
 - `earwig-hold.el`: tap versus hold, and push-to-talk
 - `earwig-check.el`: `M-x earwig-check-setup`
-- `earwig-pincer.el`: commands after a wake word, with `earwig-pincer/`, the helper that listens for it (experimental)
+- `earwig-pincer.el`: commands after a wake word, and recording, with Pincer, the helper that listens for it (experimental)
 - `docs/roadmap/`: what's planned
 - `test/earwig-test.el`: the tests

@@ -96,7 +96,7 @@
     (cond
      ((not program)
       (list 'fail "Recorder" "pincer, but earwig-pincer-command isn't set"
-            "set earwig-pincer-command, see earwig-pincer/README.md"))
+            "install Pincer (https://github.com/thndrbrrr/earwig-pincer) and set earwig-pincer-command"))
      ((not (if (file-name-directory program)
                (file-executable-p (expand-file-name program))
              (executable-find program)))

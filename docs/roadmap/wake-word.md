@@ -8,9 +8,8 @@ Earwig at a byte offset when it hears the wake word.
 
 ## Built so far: the helper
 
-The helper is built and tested on its own, in [earwig-pincer/](../../earwig-pincer/README.md),
-a self-contained Python project in this repository until it moves to a repository of its own
-(agreed). It starts with openWakeWord's pre-trained `hey_jarvis`
+The helper is built and tested on its own: [Pincer](https://github.com/thndrbrrr/earwig-pincer), a Python project of its
+own (agreed). It starts with openWakeWord's pre-trained `hey_jarvis`
 model while a "Zelda" model is trained; a custom model goes in with `--model zelda.onnx`.
 
 These were chosen while building it, and settle open questions 1 and 2 below for now; they can

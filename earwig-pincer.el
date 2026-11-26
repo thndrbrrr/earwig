@@ -23,8 +23,8 @@
 
 ;;; Commentary:
 
-;; Experimental.  Pincer, a helper program in earwig-pincer/
-;; (see its README.md), records the microphone all the time, keeps the
+;; Experimental.  Pincer, a helper program
+;; (https://github.com/thndrbrrr/earwig-pincer), records the microphone all the time, keeps the
 ;; last few seconds, and listens for a wake word with openWakeWord,
 ;; using a few percent of one core.  `earwig-pincer-command' starts
 ;; it; Earwig talks to it in JSON lines.  It serves two purposes, each
@@ -70,12 +70,10 @@
 
 (defcustom earwig-pincer-command nil
   "The command that starts Pincer, as a list of strings.
-For the one in Earwig's repository, set up with uv (see
-earwig-pincer/README.md):
+Pincer is at https://github.com/thndrbrrr/earwig-pincer.  Installed as
+its README says:
 
-  (setopt earwig-pincer-command
-          \\='(\"uv\" \"run\" \"--project\" \"/path/to/earwig/earwig-pincer\"
-            \"earwig-pincer\" \"--model\" \"hey_jarvis\"))
+  (setopt earwig-pincer-command \\='(\"earwig-pincer\" \"--model\" \"hey_jarvis\"))
 
 Earwig adds --device with `earwig-input-device'; it takes effect when
 Pincer next starts.  Options such as --model and --threshold go

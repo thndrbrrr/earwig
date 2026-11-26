@@ -2329,12 +2329,18 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
       (should (equal (earwig--strip-wake-word "Hey, Jarvis, delete that") "delete that"))
       (should (equal (earwig--strip-wake-word "Okay, delete that") "delete that")))))
 
+(defun earwig-test-pincer-program ()
+  "Return the Pincer program the tests use, or nil.
+The environment variable EARWIG_PINCER names it; otherwise it's
+earwig-pincer on the path."
+  (let ((program (or (getenv "EARWIG_PINCER") (executable-find "earwig-pincer"))))
+    (and program (file-executable-p program) program)))
+
 (ert-deftest earwig-test-listen-command ()
   "A command said after the wake word runs, without a key."
   (skip-unless (and (executable-find "sox") (executable-find "say")
-                    (earwig-server-ready-p)))
-  (let* ((pincer (expand-file-name "earwig-pincer/.venv/bin/earwig-pincer"
-                                     (file-name-directory (locate-library "earwig"))))
+                    (earwig-server-ready-p) (earwig-test-pincer-program)))
+  (let* ((pincer (earwig-test-pincer-program))
          (dir (make-temp-file "earwig-test-" t))
          (aiff (expand-file-name "speech.aiff" dir))
          (wav (expand-file-name "speech.wav" dir))
@@ -2347,7 +2353,6 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
          (inhibit-message t)
          (events nil)
          (record (lambda (event) (push (alist-get 'event event) events))))
-    (skip-unless (file-executable-p pincer))
     (advice-add 'earwig-pincer--event :before record)
     (unwind-protect
         (progn
@@ -2376,11 +2381,6 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
       (earwig-listen-mode -1)
       (delete-directory dir t))))
 
-(defun earwig-test-pincer-program ()
-  "Return Pincer in Earwig's repository, set up with uv, or nil."
-  (let ((program (expand-file-name "earwig-pincer/.venv/bin/earwig-pincer"
-                                   (file-name-directory (locate-library "earwig")))))
-    (and (file-executable-p program) program)))
 
 (defmacro earwig-test-with-pincer-recording (text &rest body)
   "Run BODY with the `pincer' recorder reading speech of TEXT made by say.

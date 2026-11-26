@@ -325,7 +325,7 @@ The manual has [more](docs/manual.md#troubleshooting), on streaming and push-to-
 
 ## Development
 
-Run the tests from the repository, with phony.el installed. `earwig-test-stream` and `earwig-test-record-runs-whole` send speech made by macOS's `say` through the server, and are skipped unless both are there. `earwig-test-paste-evil` is skipped unless evil is on the load path (add `-L path/to/evil`).
+Run the tests from the repository, with phony.el installed. `earwig-test-stream` and `earwig-test-record-runs-whole` send speech made by macOS's `say` through the server, and are skipped unless both are there. `earwig-test-paste-evil` is skipped unless evil is on the load path (add `-L path/to/evil`). The tests through [Pincer](https://github.com/thndrbrrr/earwig-pincer) are skipped unless `earwig-pincer` is on the path, or the environment variable `EARWIG_PINCER` names it.
 
 ```sh
 emacs -Q --batch -L . \
