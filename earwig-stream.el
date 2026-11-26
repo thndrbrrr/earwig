@@ -139,7 +139,7 @@ faintest sound would count as speech.  Also for
 (declare-function earwig--send-to-terminal "earwig" (text))
 (declare-function earwig-insert-parts "earwig-structure" (parts pos))
 (declare-function earwig--recorder "earwig" ())
-(declare-function earwig-listen-record "earwig-listen" (file format sentinel &optional from))
+(declare-function earwig-pincer-record "earwig-pincer" (file format sentinel &optional from))
 
 (defcustom earwig-stream-provisional t
   "Non-nil to show provisional text for the segment being spoken."
@@ -328,8 +328,8 @@ Set by earwig-hold.el once it tells the hold from a tap.")
         earwig--audio-flowing nil
         earwig--record-start (current-time))
   (setq earwig--stream-process
-        (if (eq (earwig--recorder) 'listener)
-            (earwig-listen-record (earwig--stream-raw) 'raw #'earwig--stream-recorder-sentinel)
+        (if (eq (earwig--recorder) 'pincer)
+            (earwig-pincer-record (earwig--stream-raw) 'raw #'earwig--stream-recorder-sentinel)
           (let ((process-adaptive-read-buffering nil))
             (make-process :name "earwig-stream"
                           :command (earwig--stream-command)

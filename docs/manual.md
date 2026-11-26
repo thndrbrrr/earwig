@@ -75,7 +75,7 @@ Any key can push to talk, and a key in both lists does either: tapped it toggles
 
 ### Streaming and provisional text
 
-- **Streaming** (`earwig-streaming`, on by default): text appears while you talk, provisional (grey, or blue for a command after "okay") until a pause, then final. It needs sox or the listener (see [Recording through the listener](#recording-through-the-listener-experimental)); when ffmpeg records, dictation is transcribed when you stop instead, and *Messages* says so once.
+- **Streaming** (`earwig-streaming`, on by default): text appears while you talk, provisional (grey, or blue for a command after "okay") until a pause, then final. It needs sox or Pincer (see [Recording through Pincer](#recording-through-pincer-experimental)); when ffmpeg records, dictation is transcribed when you stop instead, and *Messages* says so once.
 - **Typing over provisional text:** in dictation started with a tap, pressing a key while provisional text shows puts it in as it stands, and the key does what it does after it. Punctuation you type (`. , : ; ! ? … — – -`, in `earwig-stream-flush-punctuation`) replaces the period or comma the text ends with, so `,` after "Hello there." gives "Hello there,". Typed right after any dictation you haven't edited, streamed or not, it does the same. The space bar as a push-to-talk key does this too, so tapping it ends the segment with a space. What you say next is transcribed on its own. Dictation pushed to talk waits for the final text as usual, and so do the other voice keys, a click, and a command after "okay". `earwig-stream-flush-on-key` turns this off.
 
 ### Microphone and keyboard timing
@@ -183,32 +183,32 @@ With `earwig-listen-mode`, the microphone stays open and a wake word gives a com
 
 > Hey Jarvis, delete last word.
 
-The listening is done by earwig-listener, a helper program in `earwig-listener/` that listens for the wake word with openWakeWord, using a few percent of one core. The speech server only transcribes once it hears the wake word. Set it up as its [README](../earwig-listener/README.md) says, then:
+The listening is done by Pincer, a helper program in `earwig-pincer/` that listens for the wake word with openWakeWord, using a few percent of one core. The speech server only transcribes once it hears the wake word. Set it up as its [README](../earwig-pincer/README.md) says, then:
 
 ```elisp
-(setopt earwig-listener-command
-        '("uv" "run" "--project" "/path/to/earwig/earwig-listener"
-          "earwig-listener" "--model" "hey_jarvis"))
+(setopt earwig-pincer-command
+        '("uv" "run" "--project" "/path/to/earwig/earwig-pincer"
+          "earwig-pincer" "--model" "hey_jarvis"))
 (earwig-listen-mode 1)
 ```
 
-- The command is recorded from 1.5 s before the wake word was heard (`earwig-listener-pre-roll`), so the wake word and what follows are all there however quickly you say them; what was said before the wake word is dropped. `earwig-listener-wake-words` says how the wake word is transcribed ("hey jarvis" for the `hey_jarvis` model).
-- It's then a command as one given with a command key: shown in the echo area as you say it, and run at the pause after it, once it's complete (`earwig-listener-command-pause`, 1 s, or `earwig-command-auto-stop` if that's set). C-g cancels it.
+- The command is recorded from 1.5 s before the wake word was heard (`earwig-pincer-pre-roll`), so the wake word and what follows are all there however quickly you say them; what was said before the wake word is dropped. `earwig-pincer-wake-words` says how the wake word is transcribed ("hey jarvis" for the `hey_jarvis` model).
+- It's then a command as one given with a command key: shown in the echo area as you say it, and run at the pause after it, once it's complete (`earwig-pincer-command-pause`, 1 s, or `earwig-command-auto-stop` if that's set). C-g cancels it.
 - While Earwig records or transcribes, the wake word does nothing. While dictating, it works as "okay" does, after a pause.
 - The microphone is open all the time, as the orange indicator on macOS shows. Audio stays on your computer. A Bluetooth headset switches to its low-quality call profile while the microphone is open.
 - The pre-trained models are English phrases such as "hey Jarvis" and "alexa"; a wake word of your own needs a model trained for it (`--model path/to/model.onnx`).
 
-#### Recording through the listener (experimental)
+#### Recording through Pincer (experimental)
 
-The listener can also record everything, in place of sox, wake word or not:
+Pincer can also record everything, in place of sox, wake word or not:
 
 ```elisp
-(setopt earwig-recorder 'listener)
+(setopt earwig-recorder 'pincer)
 ```
 
-- It runs while `earwig-mode` is on, keeping the microphone open, so recording starts the moment you press a key, where sox takes 0.2 to 0.5 s. It also keeps the audio from just before: a recording starts `earwig-listener-key-pre-roll` seconds (0.25) before it was started, so a word begun as the key went down isn't cut.
+- It runs while `earwig-mode` is on, keeping the microphone open, so recording starts the moment you press a key, where sox takes 0.2 to 0.5 s. It also keeps the audio from just before: a recording starts `earwig-pincer-key-pre-roll` seconds (0.25) before it was started, so a word begun as the key went down isn't cut.
 - It streams, as sox does, and records commands and dictation that doesn't stream.
-- It records `earwig-input-device`, as named in the system's sound settings; a change takes effect when the listener next starts (turn `earwig-mode` off and on).
+- It records `earwig-input-device`, as named in the system's sound settings; a change takes effect when Pincer next starts (turn `earwig-mode` off and on).
 - sox and ffmpeg are untouched: set `earwig-recorder` back to use them. `M-x earwig-check-setup` checks whichever is chosen.
 
 ### Editing: a verb and a target
@@ -695,6 +695,6 @@ Run `M-x earwig-check-setup` first. Beyond what it finds:
 - `earwig-stream.el`: streaming dictation and provisional text
 - `earwig-hold.el`: tap versus hold, and push-to-talk
 - `earwig-check.el`: `M-x earwig-check-setup`
-- `earwig-listen.el`: commands after a wake word, with `earwig-listener/`, the helper that listens for it (experimental)
+- `earwig-pincer.el`: commands after a wake word, with `earwig-pincer/`, the helper that listens for it (experimental)
 - `docs/roadmap/`: what's planned
 - `test/earwig-test.el`: the tests

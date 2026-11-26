@@ -66,16 +66,16 @@
 (declare-function term-send-raw-string "term" (chars))
 ;; Here as well as by its cookie, for Earwig loaded from a checkout,
 ;; whose autoloads nothing generates
-(autoload 'earwig-listen-mode "earwig-listen"
+(autoload 'earwig-listen-mode "earwig-pincer"
   "Listen for a wake word, and give the voice command said after it." t)
-;; What the `listener' recorder and wake-word commands need
-(autoload 'earwig-listen-record "earwig-listen")
-(autoload 'earwig-listen-ensure "earwig-listen")
-(autoload 'earwig-listen-update "earwig-listen")
-(autoload 'earwig-listen-after-wake-word "earwig-listen")
-(autoload 'earwig-listener-log "earwig-listen"
-  "Show what earwig-listener has written to stderr: its log and errors." t)
-(defvar earwig-listener-command-pause)
+;; What the `pincer' recorder and wake-word commands need
+(autoload 'earwig-pincer-record "earwig-pincer")
+(autoload 'earwig-pincer-ensure "earwig-pincer")
+(autoload 'earwig-pincer-update "earwig-pincer")
+(autoload 'earwig-pincer-after-wake-word "earwig-pincer")
+(autoload 'earwig-pincer-log "earwig-pincer"
+  "Show what Pincer has written to stderr: its log and errors." t)
+(defvar earwig-pincer-command-pause)
 (defvar eat-terminal)
 
 (defcustom earwig-input-device "default"
@@ -88,16 +88,16 @@ devices there are."
   :type '(choice (const :tag "System default" "default") (string :tag "Device name")))
 
 (defcustom earwig-recorder 'auto
-  "Recorder for dictation and commands: `sox', `ffmpeg', `listener' or `auto'.
+  "Recorder for dictation and commands: `sox', `ffmpeg', `pincer' or `auto'.
 `auto' uses sox if it's installed (it starts capturing much sooner,
 and only it can stream, see `earwig-streaming'), ffmpeg otherwise.
-`listener' is earwig-listener, the helper that listens for a wake word
-(experimental, earwig-listen.el): it runs while `earwig-mode' is on,
+`pincer' is Pincer, the helper that listens for a wake word
+(experimental, earwig-pincer.el): it runs while `earwig-mode' is on,
 keeping the microphone open, so recording starts at once, and from a
-moment before the key was pressed (`earwig-listener-key-pre-roll').  It
-streams too.  It needs `earwig-listener-command'."
+moment before the key was pressed (`earwig-pincer-key-pre-roll').  It
+streams too.  It needs `earwig-pincer-command'."
   :type '(choice (const auto) (const sox) (const ffmpeg)
-                 (const :tag "earwig-listener (experimental)" listener)))
+                 (const :tag "Pincer (experimental)" pincer)))
 
 (defcustom earwig-recording-timeout 300
   "Seconds after which a recording transcribed when it stops stops by itself.
@@ -295,12 +295,12 @@ that of provisional text for a command given while dictating, unless
 (defvar earwig--record-target nil "Marker where its dictation goes.")
 
 (defvar earwig--record-wake nil
-  "Non-nil if the recording is of a command after the listener's wake word.
-Then the listener records it, from that position on (earwig-listen.el).")
+  "Non-nil if the recording is of a command after Pincer's wake word.
+Then Pincer records it, from that position on (earwig-pincer.el).")
 
 (defvar earwig--record-auto-stop nil
   "Seconds of silence after a complete command that stop the recording, or nil.
-See `earwig-command-auto-stop' and `earwig-listener-command-pause'.")
+See `earwig-command-auto-stop' and `earwig-pincer-command-pause'.")
 
 (defvar earwig--preview-timer nil "Timer transcribing the command being said.")
 (defvar earwig--preview-request nil "The preview's transcription request in flight.")
@@ -433,21 +433,21 @@ would hold back its small, frequent progress reports by up to a second."
 (defun earwig--record (&optional wake)
   "Record a dictation or command, transcribed when it stops.
 It goes into the current buffer at point.  With WAKE, it's a command
-after the wake word, which the listener records from its position WAKE
-on (earwig-listen.el), and which stops at the pause after it."
+after the wake word, which Pincer records from its position WAKE
+on (earwig-pincer.el), and which stops at the pause after it."
   (setq earwig--record-file (make-temp-file "earwig-" nil ".wav")
         earwig--record-target (point-marker)
         earwig--record-cancelled nil
         earwig--record-wake wake
         earwig--record-final nil
         earwig--record-auto-stop (or earwig-command-auto-stop
-                                     (and wake earwig-listener-command-pause))
+                                     (and wake earwig-pincer-command-pause))
         earwig--stream-pushed-to-talk nil
         earwig--audio-flowing nil
         earwig--record-start (current-time)
         earwig--record-process
-        (if (or wake (eq (earwig--recorder) 'listener))
-            (earwig-listen-record earwig--record-file 'wav #'earwig--record-sentinel wake)
+        (if (or wake (eq (earwig--recorder) 'pincer))
+            (earwig-pincer-record earwig--record-file 'wav #'earwig--record-sentinel wake)
           (let ((process-adaptive-read-buffering nil))
             (make-process :name "earwig-record"
                           :command (earwig--record-command earwig--record-file)
@@ -660,10 +660,10 @@ To show it, with `earwig-command-preview', and for
 
 (defun earwig--record-heard (raw)
   "Return the transcription RAW of the recording, as it's acted on.
-That's from after the wake word on, for a command after the listener's
+That's from after the wake word on, for a command after Pincer's
 wake word, as the recording starts before it."
   (if earwig--record-wake
-      (earwig-listen-after-wake-word raw)
+      (earwig-pincer-after-wake-word raw)
     raw))
 
 (defun earwig--show-command-preview (raw)
@@ -925,7 +925,7 @@ sox; with ffmpeg, dictation is transcribed when it stops instead, as
 *Messages* says once."
   (and earwig-streaming
        (eq mode 'dictate)
-       (or (memq (earwig--recorder) '(sox listener))
+       (or (memq (earwig--recorder) '(sox pincer))
            (progn
              (unless earwig--stream-fallback-noted
                (setq earwig--stream-fallback-noted t)
@@ -957,8 +957,8 @@ sox; with ffmpeg, dictation is transcribed when it stops instead, as
                (not (earwig--terminal-p (current-buffer))))
       (user-error "Buffer is read-only, can't dictate here"))
     ;; Before anything is set up for the recording, as it may fail
-    (when (eq (earwig--recorder) 'listener)
-      (earwig-listen-ensure))
+    (when (eq (earwig--recorder) 'pincer)
+      (earwig-pincer-ensure))
     (setq earwig--mode mode)
     (if (earwig--stream-p mode)
         (earwig-stream-start)
@@ -1038,10 +1038,10 @@ and `earwig-correct-keys'.
         (add-hook 'post-self-insert-hook #'earwig--punctuation-typed))
     (remove-hook 'post-self-insert-hook #'earwig--punctuation-typed)
     (earwig--hold-end))
-  ;; The `listener' recorder runs while this mode is on
-  (when (or (eq (earwig--recorder) 'listener) (featurep 'earwig-listen))
+  ;; The `pincer' recorder runs while this mode is on
+  (when (or (eq (earwig--recorder) 'pincer) (featurep 'earwig-pincer))
     (condition-case err
-        (earwig-listen-update)
+        (earwig-pincer-update)
       (error (message "Earwig: %s" (error-message-string err))))))
 
 (provide 'earwig)

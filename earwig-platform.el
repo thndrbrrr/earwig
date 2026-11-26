@@ -162,7 +162,7 @@ place, so stopping the process stops sox."
 (defun earwig--stop-recorder (proc)
   "Stop the recorder PROC, so it finishes what it's writing.
 A recorder with an `earwig-stop' property is stopped by calling it with
-PROC; that's the wake-word listener's (earwig-listen.el)."
+PROC; that's Pincer's (earwig-pincer.el)."
   (cond
    ((process-get proc 'earwig-stop)
     (funcall (process-get proc 'earwig-stop) proc))

@@ -101,13 +101,13 @@ START and END are markers; set by earwig.el.")
 ;;;; Wake and cancel words
 
 (defvar earwig-listen-mode)
-(defvar earwig-listener-wake-words)
+(defvar earwig-pincer-wake-words)
 
 (defun earwig--wake-words ()
-  "Return the wake words: `earwig-wake-words', and the listener's when it listens.
-See `earwig-listener-wake-words'."
+  "Return the wake words: `earwig-wake-words', and Pincer's when it listens.
+See `earwig-pincer-wake-words'."
   (append earwig-wake-words
-          (and (bound-and-true-p earwig-listen-mode) earwig-listener-wake-words)))
+          (and (bound-and-true-p earwig-listen-mode) earwig-pincer-wake-words)))
 
 (defun earwig--strip-wake-word (text)
   "Return TEXT after a leading wake word, or nil if it doesn't start with one.

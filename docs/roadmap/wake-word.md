@@ -8,7 +8,7 @@ Earwig at a byte offset when it hears the wake word.
 
 ## Built so far: the helper
 
-The helper is built and tested on its own, in [earwig-listener/](../../earwig-listener/README.md),
+The helper is built and tested on its own, in [earwig-pincer/](../../earwig-pincer/README.md),
 a self-contained Python project in this repository until it moves to a repository of its own
 (agreed). It starts with openWakeWord's pre-trained `hey_jarvis`
 model while a "Zelda" model is trained; a custom model goes in with `--model zelda.onnx`.
@@ -43,25 +43,25 @@ Intel Mac wheels):
 
 ## Built so far: commands after the wake word
 
-`earwig-listen.el` has a first version of Earwig's side, for commands only (see the manual,
+`earwig-pincer.el` has a first version of Earwig's side, for commands only (see the manual,
 "Commands after a wake word"). `earwig-listen-mode` starts the helper with
-`earwig-listener-command`; on a `wake` event, unless Earwig is recording or transcribing, it
-records a voice command from `earwig-listener-pre-roll` (1.5 s) before the detection, as a WAV
+`earwig-pincer-command`; on a `wake` event, unless Earwig is recording or transcribing, it
+records a voice command from `earwig-pincer-pre-roll` (1.5 s) before the detection, as a WAV
 file the helper writes (`"format": "wav"`). From there it is a command as one started with a
 command key (`earwig--record` with its WAKE argument): previewed, stopped at the pause after a
-complete command (`earwig-listener-command-pause`, 1 s, or `earwig-command-auto-stop`), and run.
+complete command (`earwig-pincer-command-pause`, 1 s, or `earwig-command-auto-stop`), and run.
 
 - **The recording is still a process.** Earwig's recording code is built around a recorder
   process (live while recording, its sentinel acting on the recording). A pipe process stands
   for the helper's recording: `earwig--stop-recorder` calls its `earwig-stop` property, which
   sends `stop`; on `stopped` it's deleted, and `earwig--recorder-stopped-p` counts that as
   stopped, not failed.
-- **What's transcribed up to the wake word is dropped** (`earwig-listen--after-wake-word`,
-  `earwig-listener-wake-words`, "hey jarvis" for now), as the recording starts before it.
-- **The listener's wake words also work while dictating**, after a pause, as "okay" does
+- **What's transcribed up to the wake word is dropped** (`earwig-pincer--after-wake-word`,
+  `earwig-pincer-wake-words`, "hey jarvis" for now), as the recording starts before it.
+- **Pincer's wake words also work while dictating**, after a pause, as "okay" does
   (`earwig--wake-words`).
 - Keys still record with sox; so question 4 below is still open. (Since settled: see "Built
-  so far: the listener as a recorder".)
+  so far: Pincer as a recorder".)
 
 Tested end to end (`earwig-test-listen-command`, with `--input` and `say`): "This is a sentence
 before. Hey Jarvis, delete last word." in a buffer with "One two three" leaves "One two". The
@@ -75,28 +75,28 @@ ended, which the server finishes even when Earwig drops it, then a fresh one of 
 
 Not tested yet: the live microphone, and false detections in everyday speech and media.
 
-## Built so far: the listener as a recorder
+## Built so far: Pincer as a recorder
 
-Agreed: the helper is a recorder **alongside** sox and ffmpeg, `listener` in `earwig-recorder`,
+Agreed: the helper is a recorder **alongside** sox and ffmpeg, `pincer` in `earwig-recorder`,
 and must not clash with them. sox and ffmpeg work as before; the helper-specific code is all in
-earwig-listen.el, and the shared code only asks which recorder it is, in four places:
+earwig-pincer.el, and the shared code only asks which recorder it is, in four places:
 `earwig--record` (commands, and dictation that doesn't stream), `earwig-stream-start`,
-`earwig--stream-p` (the listener streams), and the setup check (`earwig--check-listener`,
+`earwig--stream-p` (Pincer streams), and the setup check (`earwig--check-pincer`,
 `earwig--check-record`, `earwig--check-emacs`).
 
-- **It runs while `earwig-mode` is on** with the `listener` recorder, or with
-  `earwig-listen-mode` (`earwig-listen-update`). A recording started before it's ready waits for
-  it (`earwig-listen-ensure`, up to 30 s), before any of the recording is set up.
-- **Recording starts at once**, from `earwig-listener-key-pre-roll` (0.25 s) before: the `start`
+- **It runs while `earwig-mode` is on** with the `pincer` recorder, or with
+  `earwig-listen-mode` (`earwig-pincer-update`). A recording started before it's ready waits for
+  it (`earwig-pincer-ensure`, up to 30 s), before any of the recording is set up.
+- **Recording starts at once**, from `earwig-pincer-key-pre-roll` (0.25 s) before: the `start`
   command's new `back` field. sox took 0.18–0.24 s to go live while the helper held the
   microphone open, and 0.42–0.49 s otherwise (Earwig's "Microphone live after" log, in this
   session).
-- **Wake events act only with `earwig-listen-mode`**; with the `listener` recorder alone, the
+- **Wake events act only with `earwig-listen-mode`**; with the `pincer` recorder alone, the
   helper still listens for the wake word, but nothing comes of it.
 - **The microphone** is `earwig-input-device`, passed as `--device` when the helper starts; a
   change takes effect when it next starts.
 
-This settles question 4: keep sox (or ffmpeg) unless `earwig-recorder` is `listener`.
+This settles question 4: keep sox (or ffmpeg) unless `earwig-recorder` is `pincer`.
 
 ## Background: why not the speech server
 
@@ -269,7 +269,7 @@ VAD model is installed in `~/.local/share/orukeet/orukeet-cache/models`.
    pre-roll).
 3. Whether the audio handed over includes the wake word (existing `earwig-wake-words` path) or
    starts after it.
-4. (Settled, see "the listener as a recorder".) Whether the helper replaces sox for all recording, or only while it runs. Suggested: keep sox
+4. (Settled, see "Pincer as a recorder".) Whether the helper replaces sox for all recording, or only while it runs. Suggested: keep sox
    as the recorder when the wake word is off, and have the helper take over all three of sox's
    jobs only while it runs. Those who don't want an always-open microphone keep the simple
    setup (sox only, no Python), at the cost of two recorders to maintain, which must agree on

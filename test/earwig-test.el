@@ -2309,19 +2309,19 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
       (earwig--record-sentinel proc "finished\n"))
     (should (equal acted '(t "Go to top.")))))
 
-;;;; The wake-word listener
+;;;; Pincer: commands after the wake word, and the recorder
 
-(require 'earwig-listen)
+(require 'earwig-pincer)
 
 (ert-deftest earwig-test-listen-wake-words ()
-  "The listener's wake words: what's said up to them is dropped."
-  (let ((earwig-listener-wake-words '("hey jarvis" "zelda")))
-    (should (equal (earwig-listen-after-wake-word "Before. Hey, Jarvis! Delete that.")
+  "Pincer's wake words: what's said up to them is dropped."
+  (let ((earwig-pincer-wake-words '("hey jarvis" "zelda")))
+    (should (equal (earwig-pincer-after-wake-word "Before. Hey, Jarvis! Delete that.")
                    "Delete that."))
-    (should (equal (earwig-listen-after-wake-word "zelda go to top") "go to top"))
+    (should (equal (earwig-pincer-after-wake-word "zelda go to top") "go to top"))
     ;; Not part of a word
-    (should (equal (earwig-listen-after-wake-word "Zeldas go") "Zeldas go"))
-    (should (equal (earwig-listen-after-wake-word "Delete that.") "Delete that."))
+    (should (equal (earwig-pincer-after-wake-word "Zeldas go") "Zeldas go"))
+    (should (equal (earwig-pincer-after-wake-word "Delete that.") "Delete that."))
     ;; They give commands while dictating too, but only while listening
     (let ((earwig-listen-mode nil))
       (should-not (earwig--strip-wake-word "Hey Jarvis, delete that")))
@@ -2333,22 +2333,22 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
   "A command said after the wake word runs, without a key."
   (skip-unless (and (executable-find "sox") (executable-find "say")
                     (earwig-server-ready-p)))
-  (let* ((listener (expand-file-name "earwig-listener/.venv/bin/earwig-listener"
+  (let* ((pincer (expand-file-name "earwig-pincer/.venv/bin/earwig-pincer"
                                      (file-name-directory (locate-library "earwig"))))
          (dir (make-temp-file "earwig-test-" t))
          (aiff (expand-file-name "speech.aiff" dir))
          (wav (expand-file-name "speech.wav" dir))
-         (earwig-listener-command (list listener "--input" wav "--realtime"))
-         (earwig-listener-wake-words '("hey jarvis"))
-         (earwig-listener-command-pause 0.8)
+         (earwig-pincer-command (list pincer "--input" wav "--realtime"))
+         (earwig-pincer-wake-words '("hey jarvis"))
+         (earwig-pincer-command-pause 0.8)
          (earwig-command-auto-stop nil)
          (earwig-command-preview t)
          (earwig-input-device "default")
          (inhibit-message t)
          (events nil)
          (record (lambda (event) (push (alist-get 'event event) events))))
-    (skip-unless (file-executable-p listener))
-    (advice-add 'earwig-listen--event :before record)
+    (skip-unless (file-executable-p pincer))
+    (advice-add 'earwig-pincer--event :before record)
     (unwind-protect
         (progn
           (call-process "say" nil nil nil "-v" "Samantha" "-o" aiff
@@ -2372,30 +2372,30 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
             ;; Stopped at the pause, before the file ran out
             (should (member "end" events))
             (should (member "stopped" (member "end" events)))))
-      (advice-remove 'earwig-listen--event record)
+      (advice-remove 'earwig-pincer--event record)
       (earwig-listen-mode -1)
       (delete-directory dir t))))
 
-(defun earwig-test-listener-program ()
-  "Return the listener in Earwig's repository, set up with uv, or nil."
-  (let ((program (expand-file-name "earwig-listener/.venv/bin/earwig-listener"
+(defun earwig-test-pincer-program ()
+  "Return Pincer in Earwig's repository, set up with uv, or nil."
+  (let ((program (expand-file-name "earwig-pincer/.venv/bin/earwig-pincer"
                                    (file-name-directory (locate-library "earwig")))))
     (and (file-executable-p program) program)))
 
-(defmacro earwig-test-with-listener-recording (text &rest body)
-  "Run BODY with the `listener' recorder reading speech of TEXT made by say.
+(defmacro earwig-test-with-pincer-recording (text &rest body)
+  "Run BODY with the `pincer' recorder reading speech of TEXT made by say.
 In a buffer shown in the selected window.  Skipped without say, sox,
-the speech server or the listener."
+the speech server or Pincer."
   (declare (indent 1))
   `(progn
      (skip-unless (and (executable-find "sox") (executable-find "say")
-                       (earwig-server-ready-p) (earwig-test-listener-program)))
+                       (earwig-server-ready-p) (earwig-test-pincer-program)))
      (let* ((dir (make-temp-file "earwig-test-" t))
             (aiff (expand-file-name "speech.aiff" dir))
             (wav (expand-file-name "speech.wav" dir))
-            (earwig-recorder 'listener)
-            (earwig-listener-command (list (earwig-test-listener-program) "--input" wav "--realtime"))
-            (earwig-listener-key-pre-roll 0.25)
+            (earwig-recorder 'pincer)
+            (earwig-pincer-command (list (earwig-test-pincer-program) "--input" wav "--realtime"))
+            (earwig-pincer-key-pre-roll 0.25)
             (earwig-input-device "default")
             (earwig-listen-mode nil)
             (inhibit-message t))
@@ -2406,8 +2406,8 @@ the speech server or the listener."
              (with-temp-buffer
                (set-window-buffer nil (current-buffer))
                ,@body))
-         (earwig-listen--quit)
-         (with-timeout (5) (while (process-live-p earwig-listen--process) (sleep-for 0.1)))
+         (earwig-pincer--quit)
+         (with-timeout (5) (while (process-live-p earwig-pincer--process) (sleep-for 0.1)))
          (delete-directory dir t)))))
 
 (defun earwig-test-wait (seconds what condition)
@@ -2422,9 +2422,9 @@ the speech server or the listener."
          (unless (equal (cadr err) "Failed select")
            (signal (car err) (cdr err))))))))
 
-(ert-deftest earwig-test-listener-recorder-stream ()
-  "The `listener' recorder streams dictation, as sox does."
-  (earwig-test-with-listener-recording
+(ert-deftest earwig-test-pincer-recorder-stream ()
+  "The `pincer' recorder streams dictation, as sox does."
+  (earwig-test-with-pincer-recording
       "[[slnc 1000]] Hello world, this is a test. [[slnc 2500]] And this is the second part. [[slnc 500]]"
     (let ((earwig-streaming t)
           (earwig--mode 'dictate))
@@ -2432,15 +2432,15 @@ the speech server or the listener."
       (earwig--toggle-recording 'dictate)
       (should (earwig-stream-recording-p))
       (should earwig--audio-flowing)
-      ;; The listener exits at the end of the file, which stops the recording
+      ;; Pincer exits at the end of the file, which stops the recording
       (earwig-test-wait 60 "Streaming didn't finish" (lambda () (not earwig--stream-dir)))
       (should (> earwig--stream-count 1))
       (should (string-match-p "\\`Hello world[,.] this is a test\\. And this is the second part\\.\\'"
                               (buffer-string))))))
 
-(ert-deftest earwig-test-listener-recorder-command ()
-  "The `listener' recorder records a command started with a key."
-  (earwig-test-with-listener-recording "[[slnc 1000]] Go to top. [[slnc 5000]]"
+(ert-deftest earwig-test-pincer-recorder-command ()
+  "The `pincer' recorder records a command started with a key."
+  (earwig-test-with-pincer-recording "[[slnc 1000]] Go to top. [[slnc 5000]]"
     (let ((earwig-command-auto-stop 0.8)
           (earwig-command-preview t))
       (insert "One\nTwo")
@@ -2449,7 +2449,7 @@ the speech server or the listener."
       (should (process-get earwig--record-process 'earwig-stop))
       (earwig-test-wait 30 "The command didn't run" (lambda () (= (point) 1)))
       ;; Stopped at the pause, not when the file ran out
-      (should (process-live-p earwig-listen--process)))))
+      (should (process-live-p earwig-pincer--process)))))
 
 (defvar evil-local-mode)
 (defvar evil-move-cursor-back)
