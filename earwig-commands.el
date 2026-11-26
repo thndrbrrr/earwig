@@ -535,7 +535,7 @@ Earwig's commands, then the rest, your own."
           (princ (format "  %s\n" help)))))
     (let ((user (earwig--user-commands)))
       (when user
-        (princ "\nYour commands (Phony rules):\n\n")
+        (princ "\nYour commands:\n\n")
         (earwig--help-rows
          (mapcar (lambda (name)
                    (list (earwig--pattern-help (earwig--phony-rule-pattern name (earwig--grammar)))
