@@ -60,7 +60,8 @@ complete command (`earwig-listener-command-pause`, 1 s, or `earwig-command-auto-
   `earwig-listener-wake-words`, "hey jarvis" for now), as the recording starts before it.
 - **The listener's wake words also work while dictating**, after a pause, as "okay" does
   (`earwig--wake-words`).
-- Keys still record with sox; so question 4 below is still open.
+- Keys still record with sox; so question 4 below is still open. (Since settled: see "Built
+  so far: the listener as a recorder".)
 
 Tested end to end (`earwig-test-listen-command`, with `--input` and `say`): "This is a sentence
 before. Hey Jarvis, delete last word." in a buffer with "One two three" leaves "One two". The
@@ -73,6 +74,29 @@ recording runs as that preview heard it, without a final transcription
 ended, which the server finishes even when Earwig drops it, then a fresh one of all of it.
 
 Not tested yet: the live microphone, and false detections in everyday speech and media.
+
+## Built so far: the listener as a recorder
+
+Agreed: the helper is a recorder **alongside** sox and ffmpeg, `listener` in `earwig-recorder`,
+and must not clash with them. sox and ffmpeg work as before; the helper-specific code is all in
+earwig-listen.el, and the shared code only asks which recorder it is, in four places:
+`earwig--record` (commands, and dictation that doesn't stream), `earwig-stream-start`,
+`earwig--stream-p` (the listener streams), and the setup check (`earwig--check-listener`,
+`earwig--check-record`, `earwig--check-emacs`).
+
+- **It runs while `earwig-mode` is on** with the `listener` recorder, or with
+  `earwig-listen-mode` (`earwig-listen-update`). A recording started before it's ready waits for
+  it (`earwig-listen-ensure`, up to 30 s), before any of the recording is set up.
+- **Recording starts at once**, from `earwig-listener-key-pre-roll` (0.25 s) before: the `start`
+  command's new `back` field. sox took 0.18–0.24 s to go live while the helper held the
+  microphone open, and 0.42–0.49 s otherwise (Earwig's "Microphone live after" log, in this
+  session).
+- **Wake events act only with `earwig-listen-mode`**; with the `listener` recorder alone, the
+  helper still listens for the wake word, but nothing comes of it.
+- **The microphone** is `earwig-input-device`, passed as `--device` when the helper starts; a
+  change takes effect when it next starts.
+
+This settles question 4: keep sox (or ffmpeg) unless `earwig-recorder` is `listener`.
 
 ## Background: why not the speech server
 
@@ -245,7 +269,7 @@ VAD model is installed in `~/.local/share/orukeet/orukeet-cache/models`.
    pre-roll).
 3. Whether the audio handed over includes the wake word (existing `earwig-wake-words` path) or
    starts after it.
-4. Whether the helper replaces sox for all recording, or only while it runs. Suggested: keep sox
+4. (Settled, see "the listener as a recorder".) Whether the helper replaces sox for all recording, or only while it runs. Suggested: keep sox
    as the recorder when the wake word is off, and have the helper take over all three of sox's
    jobs only while it runs. Those who don't want an always-open microphone keep the simple
    setup (sox only, no Python), at the cost of two recorders to maintain, which must agree on

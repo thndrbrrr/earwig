@@ -2316,12 +2316,12 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
 (ert-deftest earwig-test-listen-wake-words ()
   "The listener's wake words: what's said up to them is dropped."
   (let ((earwig-listener-wake-words '("hey jarvis" "zelda")))
-    (should (equal (earwig-listen--after-wake-word "Before. Hey, Jarvis! Delete that.")
+    (should (equal (earwig-listen-after-wake-word "Before. Hey, Jarvis! Delete that.")
                    "Delete that."))
-    (should (equal (earwig-listen--after-wake-word "zelda go to top") "go to top"))
+    (should (equal (earwig-listen-after-wake-word "zelda go to top") "go to top"))
     ;; Not part of a word
-    (should (equal (earwig-listen--after-wake-word "Zeldas go") "Zeldas go"))
-    (should (equal (earwig-listen--after-wake-word "Delete that.") "Delete that."))
+    (should (equal (earwig-listen-after-wake-word "Zeldas go") "Zeldas go"))
+    (should (equal (earwig-listen-after-wake-word "Delete that.") "Delete that."))
     ;; They give commands while dictating too, but only while listening
     (let ((earwig-listen-mode nil))
       (should-not (earwig--strip-wake-word "Hey Jarvis, delete that")))
@@ -2352,7 +2352,7 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
     (unwind-protect
         (progn
           (call-process "say" nil nil nil "-v" "Samantha" "-o" aiff
-                        "This is a sentence before. [[slnc 600]] Hey Jarvis, delete last word. [[slnc 2500]]")
+                        "This is a sentence before. [[slnc 600]] Hey Jarvis, delete last word. [[slnc 5000]]")
           (call-process "sox" nil nil nil aiff "-r" "16000" "-c" "1" "-b" "16" wav)
           (with-temp-buffer
             (set-window-buffer nil (current-buffer))
@@ -2375,6 +2375,81 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
       (advice-remove 'earwig-listen--event record)
       (earwig-listen-mode -1)
       (delete-directory dir t))))
+
+(defun earwig-test-listener-program ()
+  "Return the listener in Earwig's repository, set up with uv, or nil."
+  (let ((program (expand-file-name "earwig-listener/.venv/bin/earwig-listener"
+                                   (file-name-directory (locate-library "earwig")))))
+    (and (file-executable-p program) program)))
+
+(defmacro earwig-test-with-listener-recording (text &rest body)
+  "Run BODY with the `listener' recorder reading speech of TEXT made by say.
+In a buffer shown in the selected window.  Skipped without say, sox,
+the speech server or the listener."
+  (declare (indent 1))
+  `(progn
+     (skip-unless (and (executable-find "sox") (executable-find "say")
+                       (earwig-server-ready-p) (earwig-test-listener-program)))
+     (let* ((dir (make-temp-file "earwig-test-" t))
+            (aiff (expand-file-name "speech.aiff" dir))
+            (wav (expand-file-name "speech.wav" dir))
+            (earwig-recorder 'listener)
+            (earwig-listener-command (list (earwig-test-listener-program) "--input" wav "--realtime"))
+            (earwig-listener-key-pre-roll 0.25)
+            (earwig-input-device "default")
+            (earwig-listen-mode nil)
+            (inhibit-message t))
+       (unwind-protect
+           (progn
+             (call-process "say" nil nil nil "-v" "Samantha" "-o" aiff ,text)
+             (call-process "sox" nil nil nil aiff "-r" "16000" "-c" "1" "-b" "16" wav)
+             (with-temp-buffer
+               (set-window-buffer nil (current-buffer))
+               ,@body))
+         (earwig-listen--quit)
+         (with-timeout (5) (while (process-live-p earwig-listen--process) (sleep-for 0.1)))
+         (delete-directory dir t)))))
+
+(defun earwig-test-wait (seconds what condition)
+  "Wait up to SECONDS for CONDITION, a function, to hold; fail saying WHAT if not."
+  (with-timeout (seconds (error "%s" what))
+    (while (not (funcall condition))
+      ;; Batch Emacs on macOS can fail its select() as a subprocess
+      ;; exits; the processes carry on regardless
+      (condition-case err
+          (sleep-for 0.1)
+        (file-error
+         (unless (equal (cadr err) "Failed select")
+           (signal (car err) (cdr err))))))))
+
+(ert-deftest earwig-test-listener-recorder-stream ()
+  "The `listener' recorder streams dictation, as sox does."
+  (earwig-test-with-listener-recording
+      "[[slnc 1000]] Hello world, this is a test. [[slnc 2500]] And this is the second part. [[slnc 500]]"
+    (let ((earwig-streaming t)
+          (earwig--mode 'dictate))
+      (should (earwig--stream-p 'dictate))
+      (earwig--toggle-recording 'dictate)
+      (should (earwig-stream-recording-p))
+      (should earwig--audio-flowing)
+      ;; The listener exits at the end of the file, which stops the recording
+      (earwig-test-wait 60 "Streaming didn't finish" (lambda () (not earwig--stream-dir)))
+      (should (> earwig--stream-count 1))
+      (should (string-match-p "\\`Hello world[,.] this is a test\\. And this is the second part\\.\\'"
+                              (buffer-string))))))
+
+(ert-deftest earwig-test-listener-recorder-command ()
+  "The `listener' recorder records a command started with a key."
+  (earwig-test-with-listener-recording "[[slnc 1000]] Go to top. [[slnc 5000]]"
+    (let ((earwig-command-auto-stop 0.8)
+          (earwig-command-preview t))
+      (insert "One\nTwo")
+      (earwig--toggle-recording 'command)
+      (should (process-live-p earwig--record-process))
+      (should (process-get earwig--record-process 'earwig-stop))
+      (earwig-test-wait 30 "The command didn't run" (lambda () (= (point) 1)))
+      ;; Stopped at the pause, not when the file ran out
+      (should (process-live-p earwig-listen--process)))))
 
 (defvar evil-local-mode)
 (defvar evil-move-cursor-back)

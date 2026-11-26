@@ -261,7 +261,7 @@ All options are in `M-x customize-group RET earwig RET`. These are the ones most
 | `earwig-speech-server-command`, `earwig-speech-server-directory` | nil                         | How and where Earwig starts the speech server; nil to start it yourself |
 | `earwig-speech-server-base-url`                                | `"http://127.0.0.1:18178"`  | Where the speech server listens                                      |
 | `earwig-input-device`                                          | `"default"`                 | The microphone, as named in the system's sound settings              |
-| `earwig-recorder`                                              | `auto`                      | `sox`, `ffmpeg`, or `auto` for sox if it's installed                 |
+| `earwig-recorder`                                              | `auto`                      | `sox`, `ffmpeg`, `listener` (experimental, see the manual), or `auto` for sox if it's installed |
 | `earwig-toggle-keys`                                           | Cmd-d, keypad 0; Cmd-f, keypad Enter | Keys tapped to start and stop dictation or a command        |
 | `earwig-push-to-talk`                                          | nil                         | Turns push-to-talk on                                                |
 | `earwig-push-to-talk-keys`                                     | Space                       | Keys held down to talk                                               |

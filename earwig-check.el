@@ -45,6 +45,8 @@
 (defvar earwig-hold-repeat-max)
 (defvar earwig-hold-release-delay)
 (declare-function earwig--recorder "earwig" ())
+(declare-function earwig-listen-record-test "earwig-listen" (file seconds))
+(defvar earwig-listener-command)
 
 (defcustom earwig-check-app-id "org.gnu.Emacs"
   "The macOS bundle identifier of Emacs, for its own keyboard settings."
@@ -70,6 +72,7 @@
      (list
       (cond
        ((and (eq recorder 'sox) sox) (list 'ok "Recorder" (format "sox (%s)" sox)))
+       ((eq recorder 'listener) (earwig--check-listener))
        ((and (eq recorder 'ffmpeg) ffmpeg)
         (list 'warn "Recorder" "ffmpeg: no streaming, and on macOS it loses about a second at the start"
               (earwig--check-sox-hint)))
@@ -85,6 +88,21 @@
       (if (executable-find "curl")
           (list 'ok "curl" (executable-find "curl"))
         (list 'fail "curl" "not found" (earwig--install-hint "curl")))))))
+
+(defun earwig--check-listener ()
+  "Check the `listener' recorder's command; return a check result."
+  (require 'earwig-listen)
+  (let ((program (car earwig-listener-command)))
+    (cond
+     ((not program)
+      (list 'fail "Recorder" "listener, but earwig-listener-command isn't set"
+            "set earwig-listener-command, see earwig-listener/README.md"))
+     ((not (if (file-name-directory program)
+               (file-executable-p (expand-file-name program))
+             (executable-find program)))
+      (list 'fail "Recorder" (format "listener, but %s isn't found" program)
+            "set earwig-listener-command"))
+     (t (list 'ok "Recorder" (format "listener (%s)" (string-join earwig-listener-command " ")))))))
 
 (defun earwig--check-server-command ()
   "Check `earwig-speech-server-command', if it's set."
@@ -123,16 +141,21 @@
   "Record half a second from the microphone to FILE as raw 16 kHz samples.
 Return nil, or the error output if recording failed."
   (pcase-let ((`(,status . ,output)
-               (if (eq (earwig--recorder) 'sox)
+               (cond
+                ((eq (earwig--recorder) 'listener)
+                 (let ((failure (earwig-listen-record-test file 0.5)))
+                   (cons (if failure 1 0) (or failure ""))))
+                ((eq (earwig--recorder) 'sox)
                    (let ((sox (earwig--sox-program)))
                      (apply #'earwig--run (car sox)
                             `(,@(cdr sox) "-q" "-V1" ,@(earwig--sox-input-args)
                               "-t" "raw" "-r" "16000" "-c" "1" "-b" "16"
-                              "-e" "signed-integer" ,file "trim" "0" "0.5")))
+                              "-e" "signed-integer" ,file "trim" "0" "0.5"))))
+                (t
                  (earwig--run "ffmpeg" "-loglevel" "error" "-y"
                               "-f" (earwig--ffmpeg-input-format)
                               "-i" (earwig--ffmpeg-input-device) "-t" "0.5"
-                              "-ac" "1" "-ar" "16000" "-f" "s16le" file))))
+                              "-ac" "1" "-ar" "16000" "-f" "s16le" file)))))
     (unless (and (eql status 0) (file-exists-p file)
                  (> (file-attribute-size (file-attributes file)) earwig--stream-frame-bytes))
       (earwig--check-error-line output status))))
@@ -283,7 +306,7 @@ STATUS is its exit status, for when it said nothing."
   (list
    (cond
     ((not earwig-streaming) (list 'ok "Streaming" "off"))
-    ((eq (earwig--recorder) 'sox) (list 'ok "Streaming" "on"))
+    ((memq (earwig--recorder) '(sox listener)) (list 'ok "Streaming" "on"))
     (t (list 'warn "Streaming" "on, but it needs sox: dictation is transcribed when it stops"
              (earwig--check-sox-hint))))))
 

@@ -138,6 +138,8 @@ faintest sound would count as speech.  Also for
 (declare-function earwig--show-phase "earwig" (phase))
 (declare-function earwig--send-to-terminal "earwig" (text))
 (declare-function earwig-insert-parts "earwig-structure" (parts pos))
+(declare-function earwig--recorder "earwig" ())
+(declare-function earwig-listen-record "earwig-listen" (file format sentinel &optional from))
 
 (defcustom earwig-stream-provisional t
   "Non-nil to show provisional text for the segment being spoken."
@@ -326,14 +328,16 @@ Set by earwig-hold.el once it tells the hold from a tap.")
         earwig--audio-flowing nil
         earwig--record-start (current-time))
   (setq earwig--stream-process
-        (let ((process-adaptive-read-buffering nil))
-          (make-process :name "earwig-stream"
-                        :command (earwig--stream-command)
-                        :buffer (generate-new-buffer " *earwig-stream-sox*")
-                        :connection-type 'pipe
-                        :noquery t
-                        :filter #'earwig--recorder-filter
-                        :sentinel #'earwig--stream-recorder-sentinel)))
+        (if (eq (earwig--recorder) 'listener)
+            (earwig-listen-record (earwig--stream-raw) 'raw #'earwig--stream-recorder-sentinel)
+          (let ((process-adaptive-read-buffering nil))
+            (make-process :name "earwig-stream"
+                          :command (earwig--stream-command)
+                          :buffer (generate-new-buffer " *earwig-stream-sox*")
+                          :connection-type 'pipe
+                          :noquery t
+                          :filter #'earwig--recorder-filter
+                          :sentinel #'earwig--stream-recorder-sentinel))))
   (setq earwig--stream-timer (run-at-time 0.2 0.2 #'earwig--stream-measure))
   (add-hook 'pre-command-hook #'earwig--stream-flush-on-key)
   (add-hook 'post-command-hook #'earwig--stream-point-moved)
@@ -348,7 +352,7 @@ Set by earwig-hold.el once it tells the hold from a tap.")
   "Send the rest of the recording once sox (PROC) has exited with EVENT."
   (unless (process-live-p proc)
     (cancel-timer earwig--stream-timer)
-    (unless (earwig--recorder-stopped-p event)
+    (unless (earwig--recorder-stopped-p event proc)
       (message "Recording failed (%s): %s" (string-trim event)
                (with-current-buffer (process-buffer proc) (string-trim (buffer-string)))))
     (kill-buffer (process-buffer proc))

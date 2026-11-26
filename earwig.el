@@ -68,8 +68,13 @@
 ;; whose autoloads nothing generates
 (autoload 'earwig-listen-mode "earwig-listen"
   "Listen for a wake word, and give the voice command said after it." t)
-(declare-function earwig-listen--record "earwig-listen" (file from sentinel))
-(declare-function earwig-listen--after-wake-word "earwig-listen" (raw))
+;; What the `listener' recorder and wake-word commands need
+(autoload 'earwig-listen-record "earwig-listen")
+(autoload 'earwig-listen-ensure "earwig-listen")
+(autoload 'earwig-listen-update "earwig-listen")
+(autoload 'earwig-listen-after-wake-word "earwig-listen")
+(autoload 'earwig-listener-log "earwig-listen"
+  "Show what earwig-listener has written to stderr: its log and errors." t)
 (defvar earwig-listener-command-pause)
 (defvar eat-terminal)
 
@@ -83,10 +88,16 @@ devices there are."
   :type '(choice (const :tag "System default" "default") (string :tag "Device name")))
 
 (defcustom earwig-recorder 'auto
-  "Recorder for dictation and commands: `sox', `ffmpeg', or `auto'.
+  "Recorder for dictation and commands: `sox', `ffmpeg', `listener' or `auto'.
 `auto' uses sox if it's installed (it starts capturing much sooner,
-and only it can stream, see `earwig-streaming'), ffmpeg otherwise."
-  :type '(choice (const auto) (const sox) (const ffmpeg)))
+and only it can stream, see `earwig-streaming'), ffmpeg otherwise.
+`listener' is earwig-listener, the helper that listens for a wake word
+(experimental, earwig-listen.el): it runs while `earwig-mode' is on,
+keeping the microphone open, so recording starts at once, and from a
+moment before the key was pressed (`earwig-listener-key-pre-roll').  It
+streams too.  It needs `earwig-listener-command'."
+  :type '(choice (const auto) (const sox) (const ffmpeg)
+                 (const :tag "earwig-listener (experimental)" listener)))
 
 (defcustom earwig-recording-timeout 300
   "Seconds after which a recording transcribed when it stops stops by itself.
@@ -435,8 +446,8 @@ on (earwig-listen.el), and which stops at the pause after it."
         earwig--audio-flowing nil
         earwig--record-start (current-time)
         earwig--record-process
-        (if wake
-            (earwig-listen--record earwig--record-file wake #'earwig--record-sentinel)
+        (if (or wake (eq (earwig--recorder) 'listener))
+            (earwig-listen-record earwig--record-file 'wav #'earwig--record-sentinel wake)
           (let ((process-adaptive-read-buffering nil))
             (make-process :name "earwig-record"
                           :command (earwig--record-command earwig--record-file)
@@ -652,7 +663,7 @@ To show it, with `earwig-command-preview', and for
 That's from after the wake word on, for a command after the listener's
 wake word, as the recording starts before it."
   (if earwig--record-wake
-      (earwig-listen--after-wake-word raw)
+      (earwig-listen-after-wake-word raw)
     raw))
 
 (defun earwig--show-command-preview (raw)
@@ -914,7 +925,7 @@ sox; with ffmpeg, dictation is transcribed when it stops instead, as
 *Messages* says once."
   (and earwig-streaming
        (eq mode 'dictate)
-       (or (eq (earwig--recorder) 'sox)
+       (or (memq (earwig--recorder) '(sox listener))
            (progn
              (unless earwig--stream-fallback-noted
                (setq earwig--stream-fallback-noted t)
@@ -945,6 +956,9 @@ sox; with ffmpeg, dictation is transcribed when it stops instead, as
                buffer-read-only
                (not (earwig--terminal-p (current-buffer))))
       (user-error "Buffer is read-only, can't dictate here"))
+    ;; Before anything is set up for the recording, as it may fail
+    (when (eq (earwig--recorder) 'listener)
+      (earwig-listen-ensure))
     (setq earwig--mode mode)
     (if (earwig--stream-p mode)
         (earwig-stream-start)
@@ -1023,7 +1037,12 @@ and `earwig-correct-keys'.
         (earwig--bind-keys)
         (add-hook 'post-self-insert-hook #'earwig--punctuation-typed))
     (remove-hook 'post-self-insert-hook #'earwig--punctuation-typed)
-    (earwig--hold-end)))
+    (earwig--hold-end))
+  ;; The `listener' recorder runs while this mode is on
+  (when (or (eq (earwig--recorder) 'listener) (featurep 'earwig-listen))
+    (condition-case err
+        (earwig-listen-update)
+      (error (message "Earwig: %s" (error-message-string err))))))
 
 (provide 'earwig)
 ;;; earwig.el ends here
