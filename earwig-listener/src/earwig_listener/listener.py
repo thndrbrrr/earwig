@@ -152,6 +152,13 @@ class Listener:
                 from_position = command.get("from")
                 if from_position is not None and not isinstance(from_position, int):
                     raise ValueError("from must be a position, a whole number of bytes")
+                back = command.get("back")
+                if back is not None:
+                    if from_position is not None:
+                        raise ValueError("start takes from or back, not both")
+                    if not isinstance(back, int) or back < 0:
+                        raise ValueError("back must be a whole number of bytes, 0 or more")
+                    from_position = self.position - back
                 audio_format = command.get("format", "raw")
                 if audio_format not in ("raw", "wav"):
                     raise ValueError("format must be raw or wav")

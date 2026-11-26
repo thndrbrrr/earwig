@@ -7,7 +7,7 @@ and talks to it in JSON lines.
 
 Experimental: it lives in Earwig's repository until it's tested, then moves to its own. The
 design, and what's still open, is in [docs/roadmap/wake-word.md](../docs/roadmap/wake-word.md).
-Earwig uses it in `earwig-listen-mode` (earwig-listen.el), for commands after the wake word.
+Earwig uses it (earwig-listen.el) for commands after the wake word, with `earwig-listen-mode`, and as a recorder in place of sox, with `earwig-recorder` set to `listener`.
 
 ## Why one process
 
@@ -82,7 +82,7 @@ Commands, on stdin, one JSON object a line:
 
 | Command | Fields | |
 |---------|--------|-|
-| `start` | `path`, optionally `from` and `format` | Record to `path` (overwritten) from position `from`, or from now. `from` may be as far back as the audio kept; further back is taken as the oldest kept. `format` is `raw` (the default) or `wav`: a WAV file's header has the largest length until recording stops, as sox's. A recording going on is stopped first |
+| `start` | `path`, optionally `from` or `back`, and `format` | Record to `path` (overwritten) from position `from`, or from `back` bytes before now, or from now. Either may be as far back as the audio kept; further back is taken as the oldest kept. `format` is `raw` (the default) or `wav`: a WAV file's header has the largest length until recording stops, as sox's. A recording going on is stopped first |
 | `stop` | | Stop recording; listening goes on |
 | `quit` | | Exit; so does closing stdin, SIGINT or SIGTERM |
 

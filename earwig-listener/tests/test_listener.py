@@ -154,3 +154,18 @@ def test_recording_wav(tmp_path):
         assert f.readframes(f.getnframes()) == block(1) + block(2) + block(3)
     assert listener.command('{"command": "start", "path": "x", "format": "mp3"}')
     assert events[-1]["event"] == "error"
+
+
+def test_recording_back(tmp_path):
+    """back: from that many bytes before now, as far back as the audio kept."""
+    listener, _, events = make()
+    for n in range(4):
+        listener.audio(block(n))
+    path = str(tmp_path / "rec.raw")
+    assert listener.command(json.dumps({"command": "start", "path": path, "back": BLOCK_BYTES}))
+    assert events[-1]["from"] == 3 * BLOCK_BYTES
+    assert listener.command(json.dumps({"command": "start", "path": path, "back": 10**9}))
+    assert events[-1]["from"] == 0
+    for bad in ({"back": -1}, {"back": "a"}, {"back": 0, "from": 0}):
+        assert listener.command(json.dumps({"command": "start", "path": path, **bad}))
+        assert events[-1]["event"] == "error"
