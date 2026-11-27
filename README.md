@@ -23,7 +23,7 @@ https://github.com/user-attachments/assets/c98e9aa4-047d-4ef0-beb1-6defd6b9202d
 
 ## What's new in 0.3.0
 
-Voice commands are now a [phony.el](https://github.com/ErikPrantare/phony.el) grammar. jTargets compose ("the first word of the second sentence in the paragraph with moonbase"), commands follow one another without "and then", a voice command runs when you pause, and there are new ones to move, copy, swap and wrap text.
+Voice commands are now a [phony.el](https://github.com/ErikPrantare/phony.el) grammar. Targets compose ("the first word of the second sentence in the paragraph with moonbase"), commands follow one another without "and then", a voice command runs when you pause, and there are new ones to move, copy, swap and wrap text.
 
 If you wrote commands of your own: `earwig-extra-commands` and its regexps are no longer used. Rewrite them with `phony-defun`, as in [Commands of your own](#commands-of-your-own). Earwig now needs phony.el 4.0.0. The [changelog](CHANGELOG.md) has the rest.
 
