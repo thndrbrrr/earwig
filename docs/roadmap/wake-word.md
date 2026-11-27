@@ -57,6 +57,9 @@ complete command (`earwig-pincer-command-pause`, 1 s, or `earwig-command-auto-st
   stopped, not failed.
 - **What's transcribed up to the wake word is dropped** (`earwig-pincer--after-wake-word`,
   `earwig-pincer-wake-words`, "hey jarvis" for now), as the recording starts before it.
+  (Agreed since: `earwig-pincer-wake-words` goes, the wake words are declared once in
+  `earwig-wake-words`; see [commands-without-pause.md](commands-without-pause.md), "One
+  wake-word setting".)
 - **Pincer's wake words also work while dictating**, after a pause, as "okay" does
   (`earwig--wake-words`).
 - Keys still record with sox; so question 4 below is still open. (Since settled: see "Built
@@ -175,7 +178,8 @@ mic ──► helper (e.g. Python: sounddevice + openWakeWord)
   `earwig-wake-words` (now `'("okay" "ok")`, earwig-commands.el) lets `earwig--strip-wake-word`
   and the command handling do the rest. The alternative is to start the audio after the wake
   word and run what follows as a command directly.
-- **During dictation, cut at the wake word.** The helper keeps listening on the same audio. On
+- **During dictation, cut at the wake word** (since agreed as the preferred approach; designed in
+  [commands-without-pause.md](commands-without-pause.md)). The helper keeps listening on the same audio. On
   "Zelda" it tells Earwig the offset, and Earwig cuts the segment being spoken there (as
   `earwig--stream-cut` does at a pause) instead of waiting for `earwig-stream-pause` of
   silence. The command goes through at once, and more reliably than finding "okay" in the
