@@ -2,6 +2,8 @@
 
 The [README](../README.md) covers installing Earwig, setting it up and everyday use. This manual is the full reference: every command and its details, how dictation is cleaned up, the speech server, all options, and writing commands of your own.
 
+Earwig is made for writing structured text, prose and notes in Org and Markdown above all, not code: its targets are words, sentences, paragraphs, items and sections, and nothing in it knows a programming language's syntax.
+
 ## Contents
 
 - [Recording](#recording)
@@ -12,6 +14,7 @@ The [README](../README.md) covers installing Earwig, setting it up and everyday 
   - [Checking the setup](#checking-the-setup)
 - [Voice commands](#voice-commands)
   - [How a command is recognized](#how-a-command-is-recognized)
+  - [Several commands in a row](#several-commands-in-a-row)
   - [Commands while dictating](#commands-while-dictating)
   - [Editing: a verb and a target](#editing-a-verb-and-a-target)
   - [Formatting](#formatting)
@@ -38,7 +41,7 @@ The [README](../README.md) covers installing Earwig, setting it up and everyday 
 | Key                         | Tap                                                                | Hold                     |
 |-----------------------------|--------------------------------------------------------------------|--------------------------|
 | Cmd-d, keypad 0             | start dictation; tap again to stop                                 |                          |
-| Cmd-f, keypad Enter         | start a voice command; tap again to stop                           |                          |
+| Cmd-f, keypad Enter         | start a voice command; it runs at a pause, or tap again           |                          |
 | Cmd-e, keypad `.`           | correct the word before point (or the region) and remember the fix |                          |
 | Space, with push-to-talk on | types a space                                                      | dictate until you let go |
 | C-g, while recording        | cancel a command, or dictation that doesn't stream                 |                          |
@@ -135,7 +138,7 @@ On macOS it reads the press-and-hold setting of the app `org.gnu.Emacs`; for an 
 
 ### How a command is recognized
 
-- Tap Cmd-f (or keypad Enter), or use another key with the mode `command`, and say the command. Tap it again when you're done, or have a pause end it: with `(setopt earwig-command-auto-stop 1.5)`, recording stops after 1.5 s of silence once what you've said is a complete command (or ends with "cancel"). Earwig transcribes it as you speak to tell. After "go to line" without its number, or a chain ending in "and then", it waits longer, `earwig-command-auto-stop-incomplete` (3 s), before giving up. Commands that take any words, like "select WORDS", are complete after the first word, so don't pause inside those. All of what you say has to read as commands; case and punctuation don't matter, and if it doesn't read as said, your `earwig-corrections-commands` are applied and it's tried again (all your corrections apply to every transcription anyway). "what can I say" lists the commands.
+- Tap Cmd-f (or keypad Enter), or use another key with the mode `command`, and say the command. Pause when you're done, or tap it again: recording stops after `earwig-command-auto-stop` seconds of silence (1.5) once what you've said is a complete command (or ends with "cancel"). Set it to nil to stop commands only with the key. Earwig transcribes it as you speak to tell. After "go to line" without its number, or a chain ending in "and then", it waits longer, `earwig-command-auto-stop-incomplete` (3 s), before giving up. Commands that take any words, like "select WORDS", are complete after the first word, so don't pause inside those. All of what you say has to read as commands; case and punctuation don't matter, and if it doesn't read as said, your `earwig-corrections-commands` are applied and it's tried again (all your corrections apply to every transcription anyway). "what can I say" lists the commands.
 - While dictating, say "okay" and the command: see [Commands while dictating](#commands-while-dictating).
 - Each change a command makes is one undo step.
 - Say several commands in a row and they run one after another: "select last sentence cut that go to bottom paste". "and then" between them is optional: "format bold results and then select the last sentence and then cut that". Each is its own undo step, and the chain stops at one that fails. A command that prompts, like "search", waits for you to answer before the next one runs. See [Several commands in a row](#several-commands-in-a-row) for how Earwig tells where one ends.
@@ -242,6 +245,7 @@ A part of the buffer is a UNIT, with a QUANTITY before it and a FILTER after it,
 - **Where they count.** Without a part, a unit counts in its natural container: a word in its sentence, a sentence or line in its paragraph (a list item's own text and a heading's title are paragraphs for this), an item or checkbox in its list, a heading or section in its parent's section (at the top, the buffer), a paragraph or link in the heading's own text, or the buffer where there are no headings. "Capitalize the third word" is the third word of this sentence. When a filter finds too few there, it looks further out, up to the buffer: from the paragraph to the heading's own text, its section, the sections around that, and the buffer. A part that's said is where it counts, without going further. Headings, sections, items and checkboxes are counted among their siblings: under "Plans" with A, B (B.1, B.2) and C, "the third heading" is C. With a filter, or "every", or "next" and "previous", they count at any level.
 - **Several parts.** "the first sentence of every paragraph" is one sentence per paragraph, skipping paragraphs with too few. Units next to each other are one target ("the third through fifth words"); with a filter they're separate ones, which "delete" and the other verbs act on each of, and "select" can't take. An item counts its own text, not its sub-items: "the first word of every item" counts each item once.
 - **"this" and "next" inside a part:** "this sentence in the second paragraph" works only if the cursor is in that paragraph, and "the next sentence in the second paragraph" is the first one after the cursor there.
+- **Sentences** end where Emacs's sentence motion says they do. Emacs expects two spaces after a sentence unless `sentence-end-double-space` is nil, so for text with one space, set `(setopt sentence-end-double-space nil)`; otherwise a paragraph is one long sentence. A period inside emphasis, as in `*… wait.*`, ends a sentence too.
 - **Last and next sentences.** The sentence the cursor is inside isn't the last or the next one: in `One. Two| three. Four.` "last sentence" (or "previous") is `One.` and "next sentence" is `Four.`. Right after a sentence, or just before its period, it's the last one. "last word" leaves the punctuation after the word alone. In evil's normal state the character under the cursor counts as before point.
 
 More about targets:
@@ -469,7 +473,7 @@ Command corrections apply only when the command as said matches none, so "find n
                   (punct ":" "colonel" "Colin"))))
 ```
 
-For a word misheard in a command of your own, an alternative in its pattern is better still, as Earwig's own "mark done" accepts "dunn": `"mark \\(?:done\\|dunn\\)"`.
+For a word misheard in a command of your own, an alternative in its pattern is better still, as Earwig's own "mark done" accepts "dunn": `("mark" (| "done" "dunn"))`.
 
 To see which words are misheard again and again, set `(setq earwig-log-transcriptions t)`: each transcription is logged to *Messages*, as Orukeet wrote it and as Earwig made of it.
 
@@ -581,6 +585,65 @@ Helpers:
                :immediate-finish t))))
       (org-capture-string (concat (upcase (substring task 0 1)) (substring task 1)) "v"))))
 ```
+
+## Customization reference
+
+All options live under `M-x customize-group RET earwig RET`, the speech server, streaming and hold timing in subgroups.
+
+- **`earwig-input-device`** – The microphone to record from (`"default"`: the one chosen in the system's sound settings), named as the audio driver names it.
+- **`earwig-recorder`** – `sox`, `ffmpeg`, or `auto` (sox if it's installed), for dictation and commands.
+- **`earwig-recording-timeout`** – Seconds after which a recording that isn't streamed, a command or dictation without streaming, stops by itself (300; nil for no limit).
+- **`earwig-audio-driver`**, **`earwig-pulse-latency`** – The driver sox records through (`auto`: coreaudio on macOS), and with PulseAudio, how much audio it hands sox at a time.
+- **`earwig-toggle-keys`**, **`earwig-correct-keys`** – The keys of `earwig-mode` that toggle recording when tapped, and those that correct.
+- **`earwig-push-to-talk`**, **`earwig-push-to-talk-keys`** – Whether there's push-to-talk (off by default), and the keys that record while held (the space bar).
+- **`earwig-wake-word-commands`**, **`earwig-wake-words`** – Whether you can give commands while dictating by saying "okay" first (on by default), and the words for that.
+- **`earwig-chain-words`** – Words that can go between commands (`"and then"`). Commands are found without them too; with them, words that can't be checked, as "search" takes, end there. See [Several commands in a row](#several-commands-in-a-row).
+- **`earwig-cancel-words`** – Words that, said last, cancel a command (`"cancel"`, `"never mind"`).
+- **`earwig-command-auto-stop`**, **`earwig-command-auto-stop-incomplete`** – Seconds of silence after a complete voice command started with a tap that stop its recording (1.5; nil: only the key stops it), and after what isn't a command yet (3; nil to wait for the key).
+- **`earwig-command-preview`**, **`earwig-provisional-command-display`** – Whether a command said with a command key shows in the echo area as you say it (on), and whether a command given while dictating shows in the buffer (the default) or the echo area.
+- **`earwig-flash`**, **`earwig-flash-duration`** – Whether the text a command put in, moved or wrapped flashes, so you see where it went (on), and for how long (1.5 s). "where is TARGET" flashes either way.
+- **`earwig-dash`** – The dash "wrap TARGET in dashes" puts on either side, with its spaces (`" — "`).
+- **`earwig-corrections`**, **`earwig-corrections-commands`**, **`earwig-corrections-learned`** – "Wrong => right" corrections: for every transcription, for commands only, and those made with Cmd-e.
+- **`earwig-filler-words`**, **`earwig-keep-capitalized`** – Words dropped from dictation, and words that keep their capital mid-sentence.
+- **`earwig-format-dictation`**, **`earwig-spoken-format`**, **`earwig-literal-word`** – Spoken punctuation in dictation.
+- **`earwig-log-transcriptions`** – Log each transcription to *Messages*, as Orukeet wrote it and what Earwig made of it (off by default): to see which words are misheard again and again, for `earwig-corrections`, or where spoken punctuation goes wrong.
+- **`earwig-log-commands`** – Log each voice command to *Messages* as it runs, said with a command key or after "okay" (off by default): as its provisional text shows, "▶ select last sentence ▶ cut that", with what isn't a command in grey and a cancelled one struck through.
+- **`earwig-curly-quotes`** – Whether dictated quotes and apostrophes are curly: where `electric-quote-mode` is on (the default), everywhere, or nowhere.
+- **`earwig-dictation-structure`** – Headings and list items said in dictation.
+- **`earwig-format-markup`** – The markup "format STYLE" uses in each major mode.
+- **`earwig-streaming`** and **`earwig-stream-*`** – Streaming (on by default; needs sox, and with ffmpeg dictation is transcribed when you stop, as *Messages* notes once): the pause that ends a segment (`earwig-stream-pause`), how loud and how long a sound must be to count as speech (`-speech-ratio`, `-speech-onset`, `-noise-floor`), provisional text and how much of the server's time it may take (`-provisional`, `-provisional-interval`, `-provisional-share`), the longest segment (`-max-segment`), and typing over provisional text (`-flush-on-key`, `-flush-punctuation`).
+- **`earwig-hold-*`** – Telling a held key, push-to-talk, from a tap; `earwig-hold-debug` logs the key repeat intervals.
+- **Faces and icons** – `earwig-mode-line-recording` (red), `earwig-mode-line-command` (blue) and `earwig-mode-line-transcribing` for REC, CMD and STT in the mode line, and their icons ● and ▶ (`earwig-recording-icon`, `earwig-command-icon`), also before provisional text (`earwig-provisional-icons`), with `earwig-provisional-chain-mark` between chained commands; `earwig-provisional` for provisional text, `earwig-provisional-command` for that of a command said while dictating (unset, it takes the color of CMD), and `earwig-flash` for text that flashes.
+- **`earwig-speech-server-base-url`**, **`earwig-speech-server-model`** – The address of the speech server Earwig sends recordings to, and the model name it asks for.
+- **`earwig-speech-server-command`**, **`earwig-speech-server-directory`** – How `M-x earwig-speech-server-start` runs the speech server as a subprocess of Emacs, and in which directory; unset, you start the server outside Emacs.
+- **`earwig-speech-server-stop-timeout`** – Seconds `M-x earwig-speech-server-stop` waits for the server to shut down before killing it.
+- **`earwig-check-app-id`** – The macOS bundle identifier of Emacs, whose press-and-hold setting `earwig-check-setup` reads.
+
+Commands of your own aren't an option: they're `phony-defun` forms, see [Commands of your own](#commands-of-your-own). `earwig-extra-commands`, where they used to be, is no longer used.
+
+## Troubleshooting
+
+Run `M-x earwig-check-setup` first. Beyond what it finds:
+
+| Symptom                                                              | Likely cause, and what to do                                                                                                                                                                                                       |
+|----------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Recording shows, but no text ever comes                              | The server isn't running: `M-x earwig-speech-server-start`; `M-x earwig-speech-server-log` shows its output                                                                                                                        |
+| The first words are cut off                                          | ffmpeg as the recorder: install sox, or with ffmpeg, wait a second before speaking                                                                                                                                                 |
+| Holding the space bar only types spaces                              | `earwig-push-to-talk` is off, or the key doesn't repeat (press and hold, see [Microphone and keyboard timing](#microphone-and-keyboard-timing)), or repeats more slowly than `earwig-hold-*` expect: set `(setq earwig-hold-debug t)` to log the intervals to *Messages* |
+| A spoken quote, punctuation or command is ignored or comes out wrong | Orukeet may have misheard it, or put punctuation in it: set `(setq earwig-log-transcriptions t)` to log what it wrote to *Messages*, and add a correction for a mishearing that recurs                                              |
+| Dictation stops while the key is still held                          | Repeats arrive further apart than `earwig-hold-release-delay`                                                                                                                                                                      |
+| A sentence is split at a pause to think                              | Raise `earwig-stream-pause`                                                                                                                                                                                                        |
+| Streaming never ends a segment                                       | Background noise counts as speech: raise `earwig-stream-speech-ratio`, or `earwig-stream-noise-floor` for a microphone with noise suppression                                                                                       |
+| Streaming cuts in the middle of quiet speech                         | Lower `earwig-stream-speech-ratio`                                                                                                                                                                                                 |
+| The first syllable of a short word is lost                           | Lower `earwig-stream-speech-onset`                                                                                                                                                                                                 |
+| The fan runs while you dictate                                       | Each transcription keeps the CPU busy: raise `earwig-stream-provisional-interval`, lower `earwig-stream-provisional-share`, or turn off `earwig-stream-provisional`                                                                 |
+| The same word keeps coming out wrong                                 | Fix it once with Cmd-e; it's remembered in `earwig-corrections-learned`                                                                                                                                                            |
+| A voice command does nothing                                         | It runs once you stop it: pause, or tap Cmd-f again. With `earwig-command-auto-stop` nil, only the key stops it                                                                                                                    |
+| A command runs before you've finished                                | A pause of `earwig-command-auto-stop` after a complete command ends it: say it without pausing, or raise the option. Commands that take any words, like "select WORDS", are complete after the first word                       |
+| A command isn't recognized                                           | "what can I say"; all of what you say has to read as commands, so a word too many makes it fail. Set `(setq earwig-log-commands t)` to see how it was read                                                                         |
+| Two commands run where you meant one, or the other way round         | Pause between them, or say "and then"; see [Several commands in a row](#several-commands-in-a-row)                                                                                                                                 |
+| A target picks the wrong place                                       | Name it more closely: "the next budget", "budget in this paragraph", "the second sentence with budget"; "where is TARGET" shows what it finds                                                                                     |
+| `earwig-extra-commands` is no longer used                            | Commands of your own are `phony-defun` forms now: see [Commands of your own](#commands-of-your-own)                                                                                                                                |
 
 ## Source files
 

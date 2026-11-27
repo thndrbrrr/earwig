@@ -96,7 +96,7 @@ unless it ends with one of `earwig-cancel-words'.  \\[keyboard-quit]
 while recording cancels it too."
   :type 'boolean)
 
-(defcustom earwig-command-auto-stop nil
+(defcustom earwig-command-auto-stop 1.5
   "Seconds of silence after a complete command that stop its recording.
 nil to stop it only with its key.  For a command started with a tap of
 a command key, not one pushed to talk, which stops when it's let go.
@@ -108,9 +108,9 @@ in \"go to line\" before its number, recording waits for
 `earwig-command-auto-stop-incomplete' seconds of silence instead.
 Speech is told from the background noise as in streaming dictation,
 see `earwig-stream-speech-ratio'; before you've said anything, it
-waits.  `earwig-stream-pause' (1.5) is a good start; shorter stops
-sooner after a command, but a chain of commands needs saying without
-a pause that long."
+waits.  The default is `earwig-stream-pause''s; shorter stops sooner
+after a command, but a chain of commands needs saying without a pause
+that long."
   :type '(choice (const :tag "Only with the key" nil) number))
 
 (defcustom earwig-command-auto-stop-incomplete 3.0
