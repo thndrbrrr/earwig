@@ -97,6 +97,9 @@ earwig-pincer.el, and the shared code only asks which recorder it is, in four pl
   helper still listens for the wake word, but nothing comes of it.
 - **The microphone** is `earwig-input-device`, passed as `--device` when the helper starts; a
   change takes effect when it next starts.
+- **Starting it says so**, with the whole command, shell-quoted ("Starting Pincer: …"). With
+  `earwig-pincer-log-events`, the JSON lines both ways are logged, with the time, to
+  *earwig-pincer-events* (`<` Pincer's, `>` Earwig's, `#` the start command and the exit).
 
 This settles question 4: keep sox (or ffmpeg) unless `earwig-recorder` is `pincer`.
 

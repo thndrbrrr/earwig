@@ -2358,6 +2358,44 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
       (should (equal (earwig--strip-wake-word "Hey, Jarvis, delete that") "delete that"))
       (should (equal (earwig--strip-wake-word "Okay, delete that") "delete that")))))
 
+(ert-deftest earwig-test-pincer-start-and-log ()
+  "Starting Pincer says with what command; its events can be logged."
+  (let ((earwig-pincer-command '("earwig-pincer" "--model" "hey jarvis"))
+        (earwig-input-device nil)
+        (earwig-pincer-log-events t)
+        (earwig-pincer--process nil)
+        (earwig-pincer--pending "")
+        (messages nil)
+        (command nil))
+    (when (get-buffer "*earwig-pincer-events*")
+      (kill-buffer "*earwig-pincer-events*"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'make-process)
+                   (lambda (&rest args) (setq command (plist-get args :command)) nil))
+                  ((symbol-function 'message)
+                   (lambda (format &rest args) (push (apply #'format format args) messages)))
+                  ((symbol-function 'earwig-pincer--event) #'ignore))
+          (earwig-pincer--start)
+          (should (equal command '("earwig-pincer" "--model" "hey jarvis" "--device" "default")))
+          (should (member "Starting Pincer: earwig-pincer --model \"hey jarvis\" --device default"
+                          messages))
+          ;; Whole lines only, as they come
+          (earwig-pincer--filter nil "{\"event\": \"ready\"}\n{\"event\"")
+          (earwig-pincer--filter nil ": \"wake\", \"position\": 8000}\n")
+          (with-current-buffer "*earwig-pincer-events*"
+            (should (string-match-p
+                     (concat "\\`[0-9:.]+ # start: earwig-pincer --model \"hey jarvis\" --device default\n"
+                             "[0-9:.]+ < {\"event\": \"ready\"}\n"
+                             "[0-9:.]+ < {\"event\": \"wake\", \"position\": 8000}\n\\'")
+                     (buffer-string))))
+          ;; Not logged when off
+          (let ((earwig-pincer-log-events nil))
+            (earwig-pincer--filter nil "{\"event\": \"stopped\"}\n"))
+          (with-current-buffer "*earwig-pincer-events*"
+            (should-not (string-match-p "stopped" (buffer-string)))))
+      (when (get-buffer "*earwig-pincer-events*")
+        (kill-buffer "*earwig-pincer-events*")))))
+
 (defun earwig-test-pincer-program ()
   "Return the Pincer program the tests use, or nil.
 The environment variable EARWIG_PINCER names it; otherwise it's

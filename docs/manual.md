@@ -195,6 +195,7 @@ The listening is done by [Pincer](https://github.com/thndrbrrr/earwig-pincer), a
 - While Earwig records or transcribes, the wake word does nothing. While dictating, it works as "okay" does, after a pause.
 - The microphone is open all the time, as the orange indicator on macOS shows. Turning `earwig-listen-mode` off closes it, unless Pincer is also the recorder (below); turning `earwig-mode` off always does, and turns listen mode off too. Turning listen mode on turns `earwig-mode` on. Audio stays on your computer. A Bluetooth headset switches to its low-quality call profile while the microphone is open.
 - The pre-trained models are English phrases such as "hey Jarvis" and "alexa"; a wake word of your own needs a model trained for it (`--model path/to/model.onnx`).
+- Starting Pincer says so in the echo area, with the whole command it runs. `M-x earwig-pincer-log` shows what it writes to stderr; with `(setq earwig-pincer-log-events t)`, the JSON lines Earwig and Pincer send each other are logged to *earwig-pincer-events*, with the time: `<` for Pincer's, `>` for Earwig's, and `#` for the command it was started with and how it exited.
 
 #### Recording through Pincer (experimental)
 
@@ -645,6 +646,7 @@ All options live under `M-x customize-group RET earwig RET`, the speech server, 
 - **`earwig-dictation-structure`** – Headings and list items said in dictation.
 - **`earwig-format-markup`** – The markup "format STYLE" uses in each major mode.
 - **`earwig-streaming`** and **`earwig-stream-*`** – Streaming (on by default; needs sox, and with ffmpeg dictation is transcribed when you stop, as *Messages* notes once): the pause that ends a segment (`earwig-stream-pause`), how loud and how long a sound must be to count as speech (`-speech-ratio`, `-speech-onset`, `-noise-floor`), provisional text and how much of the server's time it may take (`-provisional`, `-provisional-interval`, `-provisional-share`), the longest segment (`-max-segment`), and typing over provisional text (`-flush-on-key`, `-flush-punctuation`).
+- **`earwig-pincer-log-events`** – Log the JSON lines Earwig and Pincer send each other to *earwig-pincer-events* (off by default).
 - **`earwig-hold-*`** – Telling a held key, push-to-talk, from a tap; `earwig-hold-debug` logs the key repeat intervals.
 - **Faces and icons** – `earwig-mode-line-recording` (red), `earwig-mode-line-command` (blue) and `earwig-mode-line-transcribing` for REC, CMD and STT in the mode line, and their icons ● and ▶ (`earwig-recording-icon`, `earwig-command-icon`), also before provisional text (`earwig-provisional-icons`), with `earwig-provisional-chain-mark` between chained commands; `earwig-provisional` for provisional text, `earwig-provisional-command` for that of a command said while dictating (unset, it takes the color of CMD), and `earwig-flash` for text that flashes.
 - **`earwig-speech-server-base-url`**, **`earwig-speech-server-model`** – The address of the speech server Earwig sends recordings to, and the model name it asks for.
@@ -676,6 +678,7 @@ Run `M-x earwig-check-setup` first. Beyond what it finds:
 | A command isn't recognized                                           | "what can I say"; all of what you say has to read as commands, so a word too many makes it fail. Set `(setq earwig-log-commands t)` to see how it was read                                                                         |
 | Two commands run where you meant one, or the other way round         | Pause between them, or say "and then"; see [Several commands in a row](#several-commands-in-a-row)                                                                                                                                 |
 | A target picks the wrong place                                       | Name it more closely: "the next budget", "budget in this paragraph", "the second sentence with budget"; "where is TARGET" shows what it finds                                                                                     |
+| Pincer won't start, or the wake word does nothing                    | *Messages* shows the command Pincer was started with ("Starting Pincer: …"): try it in a terminal. `M-x earwig-pincer-log` shows what it wrote to stderr; set `(setq earwig-pincer-log-events t)` to log its JSON lines to *earwig-pincer-events* |
 | `earwig-extra-commands` is no longer used                            | Commands of your own are `phony-defun` forms now: see [Commands of your own](#commands-of-your-own)                                                                                                                                |
 
 ## Source files

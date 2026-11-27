@@ -112,6 +112,14 @@ Once it's a complete command; as `earwig-command-auto-stop', which is
 used instead when set."
   :type 'number)
 
+(defcustom earwig-pincer-log-events nil
+  "Non-nil to log what Earwig and Pincer say to each other.
+Each JSON line, with the time, goes to the buffer *earwig-pincer-events*:
+\"<\" before what Pincer wrote, \">\" before what Earwig sent it, and \"#\"
+before the command Pincer was started with and how it exited.  What
+Pincer writes to stderr is in `earwig-pincer-log'."
+  :type 'boolean)
+
 (defvar earwig-pincer--process nil "Pincer process.")
 (defvar earwig-pincer--ready nil "Non-nil once Pincer has said it's ready.")
 (defvar earwig-pincer--pending "" "Output of Pincer not yet a whole line.")
@@ -143,28 +151,33 @@ It's wanted while `earwig-mode' is on, with `earwig-listen-mode' or the
     (earwig-pincer--start))))
 
 (defun earwig-pincer--start ()
-  "Start Pincer."
+  "Start Pincer, saying with what command."
   (unless earwig-pincer-command
     (user-error "Set `earwig-pincer-command' to start earwig-pincer"))
-  (setq earwig-pincer--pending ""
-        earwig-pincer--ready nil
-        earwig-pincer--process
-        (make-process :name "earwig-pincer"
-                      :command (append earwig-pincer-command
-                                       (list "--device" (or earwig-input-device "default")))
-                      :connection-type 'pipe
-                      :noquery t
-                      :stderr (get-buffer-create " *earwig-pincer*")
-                      :filter #'earwig-pincer--filter
-                      :sentinel #'earwig-pincer--sentinel)))
+  (let ((command (append earwig-pincer-command
+                         (list "--device" (or earwig-input-device "default")))))
+    (message "Starting Pincer: %s" (combine-and-quote-strings command))
+    (earwig-pincer--log "#" (concat "start: " (combine-and-quote-strings command)))
+    (setq earwig-pincer--pending ""
+          earwig-pincer--ready nil
+          earwig-pincer--process
+          (make-process :name "earwig-pincer"
+                        :command command
+                        :connection-type 'pipe
+                        :noquery t
+                        :stderr (get-buffer-create " *earwig-pincer*")
+                        :filter #'earwig-pincer--filter
+                        :sentinel #'earwig-pincer--sentinel))))
 
 (defun earwig-pincer-ensure ()
   "Have Pincer running and ready, starting it and waiting if need be.
 Signal an error if it isn't ready in 30 seconds."
-  (unless (process-live-p earwig-pincer--process)
+  (if (process-live-p earwig-pincer--process)
+      (unless earwig-pincer--ready
+        (message "Starting Pincer..."))
+    ;; Which says so, with its command
     (earwig-pincer--start))
   (unless earwig-pincer--ready
-    (message "Starting Pincer...")
     (with-timeout (30 (error "Pincer isn't ready after 30 s; M-x earwig-pincer-log shows its output"))
       (while (and (not earwig-pincer--ready) (process-live-p earwig-pincer--process))
         (accept-process-output earwig-pincer--process 0.1)))
@@ -184,7 +197,26 @@ Signal an error if it isn't ready in 30 seconds."
 (defun earwig-pincer--send (command)
   "Send Pincer COMMAND, an alist."
   (when (process-live-p earwig-pincer--process)
-    (process-send-string earwig-pincer--process (concat (json-serialize command) "\n"))))
+    (let ((line (json-serialize command)))
+      (earwig-pincer--log ">" line)
+      (process-send-string earwig-pincer--process (concat line "\n")))))
+
+(defun earwig-pincer--log (mark line)
+  "Log LINE after MARK to *earwig-pincer-events*, with `earwig-pincer-log-events'.
+Windows showing its end keep showing it."
+  (when earwig-pincer-log-events
+    (let ((buffer (get-buffer-create "*earwig-pincer-events*")))
+      (with-current-buffer buffer
+        (let ((at-end (cl-remove-if-not (lambda (window) (= (window-point window) (point-max)))
+                                        (get-buffer-window-list buffer nil t)))
+              (follow (= (point) (point-max))))
+          (save-excursion
+            (goto-char (point-max))
+            (insert (format-time-string "%T.%3N ") mark " " line "\n"))
+          (when follow
+            (goto-char (point-max)))
+          (dolist (window at-end)
+            (set-window-point window (point-max))))))))
 
 ;;;###autoload
 (defun earwig-pincer-log ()
@@ -204,6 +236,7 @@ Signal an error if it isn't ready in 30 seconds."
     (setq earwig-pincer--pending (car (last lines)))
     (dolist (line (butlast lines))
       (unless (string-blank-p line)
+        (earwig-pincer--log "<" line)
         ;; An error here would only say the filter failed
         (condition-case err
             (earwig-pincer--event (json-parse-string line :object-type 'alist))
@@ -230,9 +263,10 @@ Signal an error if it isn't ready in 30 seconds."
        (unless earwig-pincer--started
          (earwig-pincer--stopped))))))
 
-(defun earwig-pincer--sentinel (proc _event)
-  "Clean up once Pincer PROC has exited."
+(defun earwig-pincer--sentinel (proc event)
+  "Clean up once Pincer PROC has exited, as EVENT says."
   (unless (process-live-p proc)
+    (earwig-pincer--log "#" (string-trim event))
     (setq earwig-pincer--ready nil)
     (earwig-pincer--stopped)
     (when (earwig-pincer--wanted-p)
