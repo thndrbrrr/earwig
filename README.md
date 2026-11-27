@@ -20,6 +20,7 @@ This README covers installing, setting up and using Earwig. The [manual](docs/ma
 ## Demo
 
 https://github.com/user-attachments/assets/c98e9aa4-047d-4ef0-beb1-6defd6b9202d
+
 =======
 ## What's new in 0.3.0
 
