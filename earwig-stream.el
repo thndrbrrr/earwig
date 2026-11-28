@@ -26,7 +26,7 @@
 ;; With `earwig-streaming', dictation is transcribed in segments
 ;; instead of when it stops.  sox records continuously; every so often
 ;; the new audio is measured in 30 ms frames against the background
-;; noise, and at each pause of `earwig-stream-pause' seconds after
+;; noise, and at each pause of `earwig-dictation-pause' seconds after
 ;; speech, the audio up to the middle of the pause is sent to the speech
 ;; server as a segment and inserted while you keep talking.  When
 ;; recording stops, whatever is left is sent too, so nothing is lost even
@@ -43,6 +43,19 @@
 ;; A command given while dictating (`earwig-wake-word-commands'), or
 ;; dictation moving on, ends the dictation so far: it's one undo step
 ;; and what \"scratch that\" takes back.
+;;
+;; A segment whose provisional text starts with a wake word is such a
+;; command: once complete, it ends at `earwig-command-pause' and runs as
+;; that text has it, without being transcribed again
+;; (`earwig-wake-word-commands-end-at-pause').  With Pincer recording and
+;; listening (earwig-pincer.el), its wake word needs no pause before it
+;; (`earwig-stream-wake'): the segment being spoken becomes a command,
+;; cut from the dictation before at a short pause, if there was one.
+;; Its text is split at the wake word: what's before goes in as
+;; dictation, and the rest is a command, which ends at the command
+;; pauses (`earwig--stream-commands').  Either way the command is a segment of
+;; the same recording, in the same queue, so the dictation said before
+;; it is in before it runs.
 ;;
 ;; Speech is told from the noise by how loud a sound is and how long it
 ;; lasts (`earwig-stream-speech-ratio', `earwig-stream-speech-onset'),
@@ -73,6 +86,7 @@
 (require 'earwig-platform)
 (require 'earwig-server)
 (require 'earwig-cleanup)
+(require 'earwig-log)
 
 (defgroup earwig-stream nil
   "Dictation transcribed while you speak."
@@ -85,11 +99,45 @@ Needs sox (see `earwig-recorder'); when ffmpeg records, dictation is
 transcribed when it stops, as when this is nil, and *Messages* says so."
   :type 'boolean)
 
-(defcustom earwig-stream-pause 1.5
-  "Seconds of silence after speech that end a segment.
-Shorter means text appears sooner, but more pauses inside a sentence
-end up as a full stop."
-  :type 'number)
+(defcustom earwig-dictation-pause 1.5
+  "Seconds of silence that end a stretch of dictation.
+What you said up to the pause is transcribed and goes in while you
+keep talking.  Shorter puts text in sooner, but more of your pauses
+in the middle of a sentence end up as a full stop."
+  :type 'number
+  :group 'earwig)
+
+(defcustom earwig-wake-word-commands-end-at-pause t
+  "Non-nil for a command given while dictating to run as soon as it's complete.
+After `earwig-command-pause', as heard while you said it.  nil to
+have it end like dictation, after `earwig-dictation-pause', and be
+transcribed once more before it runs: a little slower, but heard
+more carefully.  Only without Pincer listening (`earwig-listen-mode');
+with it, a command given while dictating always runs as soon as it's
+complete."
+  :type 'boolean
+  :group 'earwig)
+
+(defcustom earwig-wake-word-keeps-provisional-text t
+  "Non-nil to keep the dictation as shown when the wake word interrupts it.
+With Pincer listening (`earwig-listen-mode'), saying the wake word
+while dictating ends the dictation there.  What you said before it
+goes in as its provisional text shows it, as long as that covers all
+of it, instead of being transcribed again.  That spares the speech
+server some work.  nil to always have it transcribed again."
+  :type 'boolean
+  :group 'earwig)
+
+(defcustom earwig-repeated-wake-word 'next-command
+  "What saying the wake word again during a voice command does.
+With Pincer listening (`earwig-listen-mode'), while dictating.
+`next-command': the command said so far runs if it's complete, and
+what you say after the wake word is the next command.  If it isn't
+complete, it's dropped, so you start over.
+`start-over': the command said so far is always dropped."
+  :type '(choice (const :tag "Run it if complete, then the next command" next-command)
+                 (const :tag "Drop it and start over" start-over))
+  :group 'earwig)
 
 (defcustom earwig-stream-speech-ratio 3.0
   "How many times louder than the background noise counts as speech.
@@ -113,7 +161,7 @@ Speech must be `earwig-stream-speech-ratio' times louder than the
 background noise, or than this if that is quieter.  Microphones with
 noise suppression record near-silence between words, against which the
 faintest sound would count as speech.  Also for
-`earwig-command-auto-stop'."
+`earwig-command-pause'."
   :type 'number)
 
 ;; Shared with earwig.el
@@ -122,15 +170,23 @@ faintest sound would count as speech.  Also for
 (defvar earwig--record-start)
 (defvar earwig--last-dictation)
 (defvar earwig-wake-word-commands)
+(defvar earwig-wake-words)
 (defvar earwig-recording-icon)
 (defvar earwig--command-heard)
 (defvar earwig-command-icon)
+(defvar earwig-command-pause)
+(defvar earwig-unfinished-command-pause)
+(declare-function earwig--command-complete-p "earwig" (text))
+(declare-function earwig--act-on-command "earwig" (command target))
+(declare-function earwig--log-transcription "earwig" (raw result))
+(declare-function earwig--split-at-wake-word "earwig-commands" (text))
 (declare-function earwig--process-text "earwig" (text target pos))
 (declare-function earwig--terminal-p "earwig" (buffer))
 (declare-function earwig--follow-point "earwig" (marker))
 (declare-function earwig--evil-stepped-back-p "earwig" (pos target))
 (declare-function earwig--drop-end-punctuation "earwig" (pos))
 (declare-function earwig--strip-wake-word "earwig-commands" (text))
+(declare-function earwig-find-commands "earwig-grammar" (text))
 (declare-function earwig--command-text "earwig-grammar" (text))
 (declare-function earwig--command-parts "earwig-grammar" (text))
 (declare-function earwig--strip-cancel-word "earwig-commands" (text))
@@ -275,6 +331,27 @@ As (RAW . END), for `earwig--stream-flush'.")
 Set by earwig-hold.el once it tells the hold from a tap.")
 (defvar earwig--stream-flushed nil
   "Byte offsets of the segments flushed, whose final text is dropped.")
+(defvar earwig--stream-heard nil
+  "Segments queued with their text already, as (START . RAW).
+Their entry in `earwig--stream-queue' has no file: they aren't sent to
+the server, but go in as RAW in their turn.")
+(defvar earwig--stream-commands nil
+  "Segments started by Pincer's wake word, as (START . KIND).
+START is the byte offset where the segment starts.  KIND is `command'
+for a command, `if-complete' for one that runs only if it's complete
+and `drop' for one that never runs, as the wake word was said again
+during it (`earwig-repeated-wake-word').  What was said before the wake
+word in it goes in as dictation either way.  See `earwig-stream-wake'.")
+
+(defvar earwig--stream-wake-gap 0.2
+  "Least seconds of quiet before the wake word that the dictation is cut at.
+See `earwig--stream-wake-cut'.")
+
+(defvar earwig--stream-wake-length 0.4
+  "Seconds before where Pincer heard the wake word that it may have begun.
+It's heard as it ends: \"Zelda\" said by `say' takes about 0.45 s and
+was heard within 0.1 s of its end.  A pause to cut the dictation at
+must end this long before, so a pause inside the wake word isn't one.")
 
 (defun earwig-stream-recording-p ()
   "Non-nil while a streaming dictation is recording."
@@ -324,6 +401,8 @@ Set by earwig-hold.el once it tells the hold from a tap.")
         earwig--stream-echo nil
         earwig--command-heard nil
         earwig--stream-flushed nil
+        earwig--stream-heard nil
+        earwig--stream-commands nil
         earwig--stream-pushed-to-talk nil
         earwig--audio-flowing nil
         earwig--record-start (current-time))
@@ -338,6 +417,8 @@ Set by earwig-hold.el once it tells the hold from a tap.")
                           :noquery t
                           :filter #'earwig--recorder-filter
                           :sentinel #'earwig--stream-recorder-sentinel))))
+  (earwig--log "record" "streaming dictation starts, recording through %s, into %s at %d"
+               (earwig--recorder) (current-buffer) (point))
   (setq earwig--stream-timer (run-at-time 0.2 0.2 #'earwig--stream-measure))
   (add-hook 'pre-command-hook #'earwig--stream-flush-on-key)
   (add-hook 'post-command-hook #'earwig--stream-point-moved)
@@ -351,6 +432,8 @@ Set by earwig-hold.el once it tells the hold from a tap.")
 (defun earwig--stream-recorder-sentinel (proc event)
   "Send the rest of the recording once sox (PROC) has exited with EVENT."
   (unless (process-live-p proc)
+    (earwig--log "record" "streaming dictation stopped recording (%s) @%s"
+                 (string-trim event) (earwig--log-seconds earwig--stream-read))
     (cancel-timer earwig--stream-timer)
     (unless (earwig--recorder-stopped-p event proc)
       (message "Recording failed (%s): %s" (string-trim event)
@@ -408,7 +491,7 @@ With FINAL, also send the rest of the recording as the last segment."
     (let* ((raw (earwig--stream-raw))
            (size (or (file-attribute-size (file-attributes raw)) 0))
            (end (- size (mod size earwig--stream-frame-bytes)))
-           (pause-frames (round (/ earwig-stream-pause 0.03))))
+           (pause-frames (round (/ earwig-dictation-pause 0.03))))
       (when (> end earwig--stream-read)
         (let ((bytes (with-temp-buffer
                        (set-buffer-multibyte nil)
@@ -424,23 +507,36 @@ With FINAL, also send the rest of the recording as the last segment."
                         (let ((frame-end (+ earwig--stream-read offset earwig--stream-frame-bytes)))
                           (earwig--stream-frame level noise frame-end)
                           (cond
+                           ;; A command after Pincer's wake word ends by
+                           ;; the command pauses only
+                           ((earwig--stream-command-segment-p)
+                            (earwig--stream-end-command frame-end t))
+                           ;; One found by its wake word, sooner if it's
+                           ;; complete
+                           ((earwig--stream-end-command frame-end nil))
                            ((and earwig--stream-speech
                                  (>= earwig--stream-quiet pause-frames))
                             ;; Cut in the middle of the pause
                             (earwig--stream-cut (- frame-end (* (/ earwig--stream-quiet 2)
-                                                                  earwig--stream-frame-bytes))))
+                                                                  earwig--stream-frame-bytes))
+                                                nil "at a pause"))
                            ((and earwig-stream-max-segment
                                  (> (- frame-end earwig--stream-segment-start)
                                     (* earwig-stream-max-segment 32000)))
                             (if earwig--stream-speech
                                 (progn
-                                  (earwig--stream-cut (earwig--stream-quietest frame-end))
+                                  (earwig--stream-cut (earwig--stream-quietest frame-end)
+                                                      nil "at the longest segment")
                                   ;; Cut in the middle of speech
                                   (setq earwig--stream-speech t))
                               ;; Nothing said: not worth transcribing.  The
                               ;; last half second stays, as speech may be
                               ;; starting in it.
-                              (setq earwig--stream-segment-start (- frame-end 16000))))))))
+                              (progn
+                                (earwig--log "segment" "dropped %s: no speech"
+                                             (earwig--log-range earwig--stream-segment-start
+                                                                (- frame-end 16000)))
+                                (setq earwig--stream-segment-start (- frame-end 16000)))))))))
           (setq earwig--stream-read end)))
       ;; The rest is sent if it has speech; noise alone makes Orukeet
       ;; invent text.  If no segment was cut at all, it's sent anyway, so
@@ -449,7 +545,7 @@ With FINAL, also send the rest of the recording as the last segment."
       (when (and final
                  (> (- end earwig--stream-segment-start) 6400)
                  (or earwig--stream-speech (zerop earwig--stream-count)))
-        (earwig--stream-cut end))
+        (earwig--stream-cut end nil "as recording stopped"))
       ;; Before sending, so a segment cut where point moved goes now
       (unless final
         (earwig--stream-follow-point))
@@ -488,24 +584,37 @@ With FRAMES, in that many frames up to it instead."
       (let ((coding-system-for-write 'no-conversion))
         (write-region nil nil file nil 'silent)))))
 
-(defun earwig--stream-cut (end)
-  "Queue the recording from the current segment start to END as a segment."
-  (let ((file (expand-file-name (format "segment%03d.wav" (cl-incf earwig--stream-count))
+(defun earwig--stream-cut (end &optional raw why)
+  "Queue the recording from the current segment start to END as a segment.
+With RAW, it's transcribed already, as RAW: it isn't sent to the
+server, but goes in as RAW in its turn.  WHY says why it's cut, for
+the log (`earwig-log')."
+  (earwig--log "segment" "cut %s %s%s, noise %s%s"
+               (earwig--log-range earwig--stream-segment-start end) (or why "")
+               (if (assoc earwig--stream-segment-start earwig--stream-commands)
+                   " (a command after the wake word)" "")
+               (let ((noise (earwig--stream-noise))) (if noise (round noise) "unknown"))
+               (if raw (format ", kept as heard: %S" raw) ""))
+  (let ((start earwig--stream-segment-start)
+        (file (expand-file-name (format "segment%03d.wav" (cl-incf earwig--stream-count))
                                 earwig--stream-dir)))
-    (earwig--stream-write-wav file earwig--stream-segment-start end)
-    (setq earwig--stream-queue (append earwig--stream-queue
-                                         (list (cons file earwig--stream-segment-start)))
+    (if raw
+        (setq file nil
+              earwig--stream-heard (cons (cons start raw) earwig--stream-heard))
+      (earwig--stream-write-wav file start end))
+    (setq earwig--stream-queue (append earwig--stream-queue (list (cons file start)))
           earwig--stream-segment-start end
           earwig--stream-speech nil
           earwig--stream-quiet 0)))
 
 ;;;; Transcribing
 
-(defun earwig--stream-request (file callback)
-  "Send FILE to the server; call CALLBACK with success and the output when done.
-FILE is deleted then.  Only one request runs at a time, as the server
-takes one at a time, and the segments go in in order: the next one is
-only sent once CALLBACK has run for this one."
+(defun earwig--stream-request (file callback &optional label)
+  "Send FILE to the server; call CALLBACK with success and output when done.
+LABEL says what it is, for the log.  FILE is deleted then.  Only one
+request runs at a time, as the server takes one at a time, and the
+segments go in in order: the next one is only sent once CALLBACK has
+run for this one."
   (let (request)
     (setq request
           (earwig-server-transcribe file (lambda (ok output)
@@ -513,36 +622,55 @@ only sent once CALLBACK has run for this one."
                                              (setq earwig--stream-curl nil))
                                            (when (file-exists-p file)
                                              (delete-file file))
-                                           (funcall callback ok output)))
+                                           (funcall callback ok output))
+                                    label)
           earwig--stream-curl request)))
 
 (defun earwig--stream-next ()
   "Send the next queued segment, or finish once everything is inserted."
   (unless earwig--stream-curl
-    (pcase-let ((`(,file . ,start) (pop earwig--stream-queue)))
+    (pcase-let* ((entry (pop earwig--stream-queue))
+                 (`(,file . ,start) entry))
       (cond
+       ;; Transcribed already
+       ((and entry (null file))
+        (let ((raw (cdr (assoc start earwig--stream-heard))))
+          (setq earwig--stream-heard (assoc-delete-all start earwig--stream-heard))
+          (earwig--stream-transcribed t raw start)))
        ;; Too short to hold a word
        ((and file (< (file-attribute-size (file-attributes file)) (+ 44 3200)))
+        (earwig--log "segment" "dropped %s: too short to hold a word"
+                     (earwig--log-range start (+ start (file-attribute-size (file-attributes file))
+                                                 -44)))
         (delete-file file)
+        (setq earwig--stream-commands (assoc-delete-all start earwig--stream-commands))
         (earwig--stream-provisional-done start)
         (earwig--stream-next))
        (file
         (earwig--stream-request
-         file (lambda (ok output) (earwig--stream-transcribed ok output start))))
+         file (lambda (ok output) (earwig--stream-transcribed ok output start))
+         (format "segment %s" (earwig--log-range
+                               start (+ start (file-attribute-size (file-attributes file)) -44)))))
        ((and (not (earwig-stream-recording-p)) earwig--stream-dir)
         (earwig--stream-finish))))))
 
 (defun earwig--stream-transcribed (ok output start)
   "Insert OUTPUT for the segment at byte START if OK, then send the next one."
   (condition-case err
-      (cond
-       ((memql start earwig--stream-flushed)
-        (setq earwig--stream-flushed (delq start earwig--stream-flushed)))
-       ((not ok)
-        (message "Transcription failed: %s" output))
-       ;; Not a dash or dot written for silence
-       ((earwig-heard-words-p output)
-        (earwig--stream-insert output start)))
+      (let ((kind (cdr (assoc start earwig--stream-commands))))
+        (setq earwig--stream-commands (assoc-delete-all start earwig--stream-commands))
+        (cond
+         ((memql start earwig--stream-flushed)
+          (earwig--log "heard" "@%s dropped, as a key put its provisional text in"
+                       (earwig--log-seconds start))
+          (setq earwig--stream-flushed (delq start earwig--stream-flushed)))
+         ((not ok)
+          (message "Transcription failed: %s" output))
+         (kind
+          (earwig--stream-woken-transcribed output start kind))
+         ;; Not a dash or dot written for silence
+         ((earwig-heard-words-p output)
+          (earwig--stream-insert output start))))
     (error (message "Inserting dictation failed: %s" (error-message-string err))))
   (earwig--stream-provisional-done start)
   (earwig--stream-next))
@@ -566,10 +694,14 @@ only sent once CALLBACK has run for this one."
                ;; with speech since then, not only the pause after it
                (> earwig--stream-speech-end
                   (max earwig--stream-provisional-end earwig--stream-segment-start))
-               (>= (- (float-time) earwig--stream-provisional-time)
-                   (max earwig-stream-provisional-interval
-                        (/ earwig--stream-provisional-duration
-                           (max earwig-stream-provisional-share 0.01)))))
+               (or
+                ;; A pause begins after a command: what's said up to it
+                ;; is transcribed now, to tell whether it's complete
+                (and (>= earwig--stream-quiet 10) (earwig--stream-in-command-p))
+                (>= (- (float-time) earwig--stream-provisional-time)
+                    (max earwig-stream-provisional-interval
+                         (/ earwig--stream-provisional-duration
+                            (max earwig-stream-provisional-share 0.01))))))
       (let ((file (expand-file-name "provisional.wav" earwig--stream-dir))
             (start earwig--stream-segment-start))
         (earwig--stream-write-wav file start end)
@@ -581,7 +713,8 @@ only sent once CALLBACK has run for this one."
                       (- (float-time) earwig--stream-provisional-time))
                 (when ok
                   (earwig--stream-show-provisional output start end))
-                (earwig--stream-next)))))))
+                (earwig--stream-next))
+         (format "provisional %s" (earwig--log-range start end)))))))
 
 (defun earwig--stream-show-provisional (raw start &optional end)
   "Show the transcription RAW of the segment at byte START as provisional text.
@@ -600,16 +733,32 @@ or a command with `earwig-provisional-command-display' set to
     (let* ((target earwig--stream-target)
            (buffer (marker-buffer target))
            (clean (earwig-clean raw))
-           (face (earwig--provisional-face clean))
-           (command (and (not (eq face 'earwig-provisional))
-                         (earwig--provisional-command-text clean)))
+           ;; After Pincer's wake word: what's said before it is dictation,
+           ;; and all of it, while no command is told in it (yet)
+           (split (and (assoc start earwig--stream-commands)
+                       (or (earwig--stream-woken-split clean) (cons clean ""))))
+           (face (if split
+                     (earwig--provisional-command-face)
+                   (earwig--provisional-face clean)))
+           (command (cond
+                     (split (earwig--provisional-command-text (cdr split) t))
+                     ((not (eq face 'earwig-provisional))
+                      (earwig--provisional-command-text clean))))
            (terminal (and buffer (earwig--terminal-p buffer)))
            (echo (or terminal
                      (and command (eq earwig-provisional-command-display 'echo-area))))
+           (pos (and buffer (marker-position target)))
            (text (and buffer
                       (or command
-                          (earwig-apply-format clean terminal (unless terminal buffer)
-                                               (marker-position target))))))
+                          (earwig-apply-format clean terminal (unless terminal buffer) pos))))
+           ;; The dictation before Pincer's wake word, shown before it
+           (before (and split buffer (not terminal) (earwig-heard-words-p (car split))
+                        (earwig--provisional-propertize
+                         (earwig--provisional-mark
+                          (earwig-fit-to-context
+                           (earwig-apply-format (car split) nil buffer pos) buffer pos)
+                          nil)
+                         'earwig-provisional))))
       ;; A command shows its mark before anything follows the wake word
       (unless (or (null buffer) (and (not command) (string-empty-p text)))
         (setq earwig--stream-provisional-for start
@@ -618,24 +767,24 @@ or a command with `earwig-provisional-command-display' set to
         (if echo
             (progn
               (when (overlayp earwig--stream-overlay)
-                (overlay-put earwig--stream-overlay 'before-string nil))
+                (overlay-put earwig--stream-overlay 'before-string before))
               (earwig--stream-echo (earwig--provisional-propertize
                                     (earwig--provisional-mark text command) face)))
           (earwig--stream-echo nil)
           (setq text (earwig--provisional-mark
                       (if command
                           (with-current-buffer buffer
-                            (if (memq (char-before target) '(nil ?\s ?\t ?\n))
+                            (if (and (not before) (memq (char-before target) '(nil ?\s ?\t ?\n)))
                                 text
                               (concat " " text)))
-                        (earwig-fit-to-context text buffer (marker-position target)))
+                        (earwig-fit-to-context text buffer pos))
                       command))
           (unless (overlayp earwig--stream-overlay)
             ;; Advancing, so it stays after final text inserted at it
             (setq earwig--stream-overlay (make-overlay target target buffer t t)))
           (move-overlay earwig--stream-overlay target target buffer)
           (overlay-put earwig--stream-overlay 'before-string
-                       (earwig--provisional-propertize text face)))))))
+                       (concat before (earwig--provisional-propertize text face))))))))
 
 (defun earwig--provisional-propertize (text face)
   "Return TEXT with FACE, below the face of its mark."
@@ -725,8 +874,9 @@ For a command given while dictating, see `earwig--command-heard'."
   (when (and start (eql start earwig--stream-provisional-for))
     (setq earwig--stream-provisional-for nil
           earwig--stream-provisional-raw nil)
-    ;; Unless it's a command, which shows CMD until it has run
-    (unless (eq earwig--command-heard 'running)
+    ;; Unless it's a command, which shows CMD until it has run, or one
+    ;; after Pincer's wake word is being said
+    (unless (or (eq earwig--command-heard 'running) (earwig--stream-command-segment-p))
       (earwig--stream-command-heard nil))
     (when (overlayp earwig--stream-overlay)
       (overlay-put earwig--stream-overlay 'before-string nil))
@@ -781,6 +931,7 @@ dictation so far, as what's typed next is no part of it."
                (overlayp overlay)
                (overlay-get overlay 'before-string)
                (eq (overlay-buffer overlay) (current-buffer))
+               (not (assoc start earwig--stream-commands))
                (not (and earwig-wake-word-commands
                          (earwig--strip-wake-word (concat (earwig-clean raw) " ")))))
       (let ((queued (rassoc start earwig--stream-queue)))
@@ -788,11 +939,14 @@ dictation so far, as what's typed next is no part of it."
          ((and (= start earwig--stream-segment-start) (earwig-stream-recording-p))
           (earwig--stream-restart-segment (or end earwig--stream-read)))
          (queued
-          (setq earwig--stream-queue (delq queued earwig--stream-queue))
-          (when (file-exists-p (car queued))
+          (setq earwig--stream-queue (delq queued earwig--stream-queue)
+                earwig--stream-heard (assoc-delete-all start earwig--stream-heard))
+          (when (and (car queued) (file-exists-p (car queued)))
             (delete-file (car queued))))
          (t
           (push start earwig--stream-flushed))))
+      (earwig--log "heard" "@%s put in by a key as its provisional text shows: %S"
+                   (earwig--log-seconds start) raw)
       (earwig--stream-insert raw start)
       ;; Where the key types, which may be elsewhere if point moved
       (when (and key (seq-contains-p earwig-stream-flush-punctuation key))
@@ -800,6 +954,328 @@ dictation so far, as what's typed next is no part of it."
       (earwig--stream-provisional-done start)
       (earwig--stream-break)
       (earwig--stream-next))))
+
+;;;; Commands while dictating
+
+(defun earwig--stream-command-segment-p ()
+  "Non-nil if the segment being spoken is a command after Pincer's wake word."
+  (and (assoc earwig--stream-segment-start earwig--stream-commands) t))
+
+(defun earwig--stream-in-command-p ()
+  "Non-nil if the segment being spoken is a command that ends at a command pause.
+After Pincer's wake word, or with `earwig-wake-word-commands-end-at-pause',
+one its provisional text shows starts with a wake word."
+  (or (earwig--stream-command-segment-p)
+      (and earwig-wake-word-commands-end-at-pause
+           earwig-wake-word-commands
+           (eql earwig--stream-provisional-for earwig--stream-segment-start)
+           (eq earwig--command-heard t))))
+
+(defvar earwig--stream-heard-cache nil
+  "((RAW . WOKEN) . COMPLETE) for `earwig--stream-heard-command'.")
+
+(defun earwig--stream-heard-command (woken)
+  "Return the command being said as its provisional text has it, if complete.
+That's the transcription, if it covers all the speech of the segment
+being spoken, and it's a complete command (`earwig--command-complete-p').
+WOKEN non-nil means the segment is a command after Pincer's wake word;
+otherwise it must start with a wake word."
+  (pcase-let ((`(,raw . ,end) earwig--stream-provisional-raw))
+    (when (and raw end
+               (eql earwig--stream-provisional-for earwig--stream-segment-start)
+               (>= end earwig--stream-speech-end))
+      ;; Parsed once for each transcription, not for each frame
+      (unless (equal (car earwig--stream-heard-cache) (cons raw woken))
+        (setq earwig--stream-heard-cache
+              (cons (cons raw woken)
+                    (let* ((clean (earwig-clean raw))
+                           (command
+                            (if woken
+                                ;; The last, if the wake word was said again
+                                (car (last (earwig--split-at-wake-words
+                                            (cdr (or (earwig--stream-woken-split clean)
+                                                     (cons "" clean))))))
+                              (and earwig-wake-word-commands
+                                   (earwig--strip-wake-word clean)))))
+                      (and command (earwig--command-complete-p command))))))
+      (and (cdr earwig--stream-heard-cache) raw))))
+
+(defun earwig--stream-end-command (frame-end woken)
+  "End the command being said at the pause up to FRAME-END, if it's time to.
+Return non-nil if it ended.  WOKEN non-nil means it's a command after
+Pincer's wake word: it ends after `earwig-command-pause' once
+complete, and after `earwig-unfinished-command-pause' otherwise.
+Without, a segment starting with a wake word ends after
+`earwig-command-pause' once complete, with
+`earwig-wake-word-commands-end-at-pause'; otherwise it's left to end
+as dictation does.  Either way, a complete command runs as heard,
+without being transcribed again."
+  (when (if woken
+            ;; Even if nothing was told from the noise after the wake word
+            t
+          (and earwig--stream-speech (earwig--stream-in-command-p)))
+    (let* ((quiet (* earwig--stream-quiet 0.03))
+           ;; In the middle of the pause
+           (cut (- frame-end (* (/ earwig--stream-quiet 2) earwig--stream-frame-bytes)))
+           (heard (and (>= quiet earwig-command-pause)
+                       (earwig--stream-heard-command woken))))
+      (cond
+       (heard
+        (earwig--stream-cut cut heard (format "as a complete command, after %.2fs of quiet"
+                                              quiet))
+        t)
+       ((and woken earwig-unfinished-command-pause
+             (>= quiet earwig-unfinished-command-pause))
+        (earwig--stream-cut cut nil (format "as an unfinished command, after %.2fs of quiet"
+                                            quiet))
+        t)))))
+
+(defun earwig--stream-loud-between (beg end &optional frames)
+  "Non-nil if there was speech between bytes BEG and END, as measured.
+That's FRAMES loud frames in a row, by default
+`earwig-stream-speech-onset''s worth; with 1, any loud frame.  Also
+non-nil when that can't be told, as the levels kept don't reach back
+to BEG."
+  (let ((noise (earwig--stream-noise))
+        (frames (or frames (earwig--stream-onset-frames)))
+        (run 0)
+        (oldest earwig--stream-read))
+    (or (null noise)
+        (cl-loop for level in earwig--stream-levels
+                 for frame-end downfrom earwig--stream-read by earwig--stream-frame-bytes
+                 while (> frame-end beg)
+                 do (setq oldest (- frame-end earwig--stream-frame-bytes))
+                 thereis (when (< oldest end)
+                           (if (> level (* earwig-stream-speech-ratio noise))
+                               (>= (cl-incf run) frames)
+                             (setq run 0)
+                             nil)))
+        (> oldest beg))))
+
+(defun earwig--stream-wake-cut (pos)
+  "Return where to cut the dictation for the wake word Pincer heard at byte POS.
+In the middle of the last pause before it, of `earwig--stream-wake-gap'
+seconds of quiet at least, ending `earwig--stream-wake-length' seconds
+before POS.  Without one in the segment being spoken, at its start: the
+whole segment is then the command, and its text is split at the wake
+word (`earwig--stream-woken-split').  Not in the middle of speech, as
+Orukeet transcribes both halves of a word cut in two badly, and the
+wake word with them."
+  (let ((noise (earwig--stream-noise))
+        (limit (- pos (* 2 (round (* earwig--stream-wake-length 16000)))))
+        (gap (* 2 (round (* earwig--stream-wake-gap 16000))))
+        (start earwig--stream-segment-start))
+    (if (null noise)
+        start
+      (catch 'cut
+        (let ((frame-end earwig--stream-read)
+              (quiet-end nil))
+          (dolist (level earwig--stream-levels)
+            (let ((frame-start (- frame-end earwig--stream-frame-bytes)))
+              ;; Quiet back to the segment's start: nothing said before
+              (when (< frame-start start)
+                (throw 'cut start))
+              (if (and (<= frame-end limit)
+                       (<= level (* earwig-stream-speech-ratio noise)))
+                  (unless quiet-end
+                    (setq quiet-end frame-end))
+                (when (and quiet-end (>= (- quiet-end frame-end) gap))
+                  (throw 'cut (/ (+ frame-end quiet-end) 2)))
+                (setq quiet-end nil))
+              (setq frame-end frame-start)))
+          start)))))
+
+(defun earwig-stream-wake (pos)
+  "Pincer heard its wake word at byte POS of the recording: a command starts.
+The segment being spoken becomes a command (see
+`earwig--stream-commands'), which ends at a command pause
+(`earwig--stream-end-command') rather than at the next pause of
+dictation.  If there's a short pause before the wake word, it's cut
+there first (`earwig--stream-wake-cut'): the part before is dictation,
+and goes in before the command runs, as its provisional text if
+`earwig-wake-word-keeps-provisional-text' and that covers all of it.
+Otherwise what's said before the wake word goes in as dictation once
+the command's text is in (`earwig--stream-woken-split').  Said during a
+command, the wake word starts the next one, see
+`earwig-repeated-wake-word'."
+  (when (and earwig--stream-dir (earwig-stream-recording-p))
+    ;; Have the levels up to where it was heard
+    (earwig--stream-measure)
+    (let* ((start earwig--stream-segment-start)
+           (cut (earwig--stream-wake-cut pos))
+           (command (or (earwig--stream-command-segment-p)
+                        (and (eql earwig--stream-provisional-for start)
+                             (eq earwig--command-heard t)))))
+      (earwig--log "wake" "@%s, the segment being spoken from @%s%s, measured to @%s: %s"
+                   (earwig--log-seconds pos) (earwig--log-seconds start)
+                   (if command ", a command already" "")
+                   (earwig--log-seconds earwig--stream-read)
+                   (cond ((= cut start) "no pause before it, the whole segment is the command")
+                         ((not (earwig--stream-loud-between start cut))
+                          (format "nothing said before it, the command starts @%s"
+                                  (earwig--log-seconds cut)))
+                         (t (format "cut at the pause @%s" (earwig--log-seconds cut)))))
+      (when (> cut start)
+        (if (not (earwig--stream-loud-between start cut))
+            ;; Nothing said before it
+            (progn
+              (setq earwig--stream-commands (assoc-delete-all start earwig--stream-commands))
+              (earwig--stream-provisional-done start))
+          (when command
+            (setf (alist-get start earwig--stream-commands)
+                  (if (eq earwig-repeated-wake-word 'start-over) 'drop 'if-complete)))
+          (earwig--stream-cut
+           cut
+           (pcase-let ((`(,raw . ,end) earwig--stream-provisional-raw))
+             ;; As shown, if that's all that was said before the cut
+             (and raw end
+                  (or command earwig-wake-word-keeps-provisional-text)
+                  (eql earwig--stream-provisional-for start)
+                  (<= end cut)
+                  (not (earwig--stream-loud-between end cut 1))
+                  raw))
+           (if command
+               (format "before the wake word, said again: the command before it %s"
+                       (if (eq earwig-repeated-wake-word 'start-over)
+                           "is dropped" "runs if complete"))
+             "before the wake word")))
+        (earwig--stream-restart-segment cut))
+      (setf (alist-get earwig--stream-segment-start earwig--stream-commands) 'command)
+      (earwig--stream-next)
+      ;; The command's mark shows, after what's said before it in the
+      ;; segment; unless the provisional text of the dictation cut off
+      ;; before it does, until that's in
+      (cond
+       ((eql earwig--stream-provisional-for earwig--stream-segment-start)
+        (pcase-let ((`(,raw . ,end) earwig--stream-provisional-raw))
+          (earwig--stream-show-provisional raw earwig--stream-segment-start end)))
+       ((null earwig--stream-provisional-for)
+        (earwig--stream-show-provisional "" earwig--stream-segment-start))
+       (t
+        (earwig--stream-command-heard t))))))
+
+(defun earwig--stream-woken-split (text)
+  "Return (BEFORE . COMMAND) for TEXT, said around Pincer's wake word, or nil.
+Split at the wake word (`earwig--split-at-wake-word'), or, when it
+isn't transcribed as one of `earwig-wake-words', where the commands
+TEXT ends with begin (`earwig--split-at-command').  BEFORE is dictation;
+a comma it ends with, put there for the wake word, is a period."
+  (let ((split (or (earwig--split-at-wake-word text) (earwig--split-at-command text))))
+    (when split
+      (cons (replace-regexp-in-string "[,;:]+\\'" "." (string-trim-right (car split)))
+            (cdr split)))))
+
+(defun earwig--split-at-command (text)
+  "Return (BEFORE . COMMAND), TEXT split where the commands it ends with begin.
+COMMAND is the longest end of TEXT, in whole words, that reads as voice
+commands, perhaps cancelled; nil if none does.  BEFORE is the rest,
+less the words it ends with if they sound like one of
+`earwig-wake-words' (`earwig--sound-key'): Orukeet may hear \"Zelda\"
+as \"sell the\"."
+  (let* ((words (split-string text "[ \t\n]+" t))
+         (n (length words)))
+    (cl-loop for i from (max 0 (- n 30)) below n
+             for command = (string-join (nthcdr i words) " ")
+             when (let ((cancel (earwig--strip-cancel-word command)))
+                    (earwig-find-commands (if cancel (car cancel) command)))
+             return (let ((before (seq-take words i)))
+                      (cl-loop for k from 1 to (min 3 i)
+                               when (member (earwig--sound-key
+                                             (string-join (last before k) " "))
+                                            (earwig--wake-word-keys))
+                               return (setq before (butlast before k)))
+                      (cons (string-join before " ") command)))))
+
+(defun earwig--sound-key (text)
+  "Return a rough key for how TEXT sounds: its consonants, simplified.
+\"Zelda\", \"Selda\", \"sell the\" and \"cell to\" all give \"slt\"."
+  (let ((key (downcase (replace-regexp-in-string "[^[:alpha:]]+" "" text))))
+    (pcase-dolist (`(,from . ,to) '(("ph" . "f") ("th" . "t") ("c\\([eiy]\\)" . "s\\1")
+                                    ("ck" . "k") ("[cq]" . "k") ("x" . "ks") ("z" . "s")
+                                    ("d" . "t") ("b" . "p") ("g" . "k") ("v" . "f")
+                                    ("[aeiouhwy]+" . "") ("\\(.\\)\\1+" . "\\1")))
+      (setq key (replace-regexp-in-string from to key t)))
+    key))
+
+(defun earwig--wake-word-keys ()
+  "Return the `earwig--sound-key' of each of `earwig-wake-words', if long enough.
+A key of one consonant would match too many words."
+  (seq-filter (lambda (key) (>= (length key) 2))
+              (mapcar #'earwig--sound-key earwig-wake-words)))
+
+(defun earwig--stream-woken-transcribed (raw start kind)
+  "Act on the transcription RAW of a segment at byte START after the wake word.
+That's a segment Pincer's wake word started.  What's before the wake
+word in it goes in as dictation, and what's after is the command, as
+`earwig--stream-woken-split' tells them apart; all of it, if it can't.
+KIND is as in `earwig--stream-commands'.  The wake word said again in
+it starts the next command, see `earwig-repeated-wake-word'."
+  (let* ((clean (if earwig-log (earwig--log-clean raw) (earwig-clean raw)))
+         (split (or (earwig--stream-woken-split clean) (cons "" clean)))
+         (commands (earwig--split-at-wake-words (string-trim (cdr split)))))
+    (when (earwig-heard-words-p (car split))
+      (earwig--stream-insert (car split) start))
+    (earwig--stream-follow-point)
+    (earwig--stream-move-on start)
+    (when earwig-log
+      (earwig--log-woken-split raw clean split commands kind start))
+    (if (null commands)
+        (earwig--log-message "Wake word heard, but no command")
+      (cl-loop for (command . more) on commands
+               do (earwig--stream-woken-command
+                   command
+                   (cond ((not more) kind)
+                         ((eq earwig-repeated-wake-word 'start-over) 'drop)
+                         (t 'if-complete)))))))
+
+(defun earwig--log-woken-split (raw clean split commands kind start)
+  "Log how the transcription RAW of the segment at START was split.
+CLEAN is RAW cleaned up, SPLIT its (BEFORE . COMMAND), COMMANDS the
+commands said after a wake word each, KIND as in
+`earwig--stream-commands'."
+  (earwig--log "heard" "@%s after the wake word: %S" (earwig--log-seconds start) raw)
+  (let* ((exact (earwig--split-at-wake-word clean))
+         (at-command (and (not exact) (earwig--split-at-command clean)))
+         (said-before (and at-command
+                           (string-trim (string-remove-suffix (cdr at-command) clean)))))
+    (earwig--log "split" "%s; dictation %S, commands %S%s"
+                 (cond (exact "at the wake word")
+                       (at-command
+                        (if (equal said-before (string-trim (car at-command)))
+                            "no wake word heard: at the commands it ends with"
+                          (format "no wake word heard: at the commands it ends with, dropping %S, which sounds like it"
+                                  (string-trim (string-remove-prefix (car at-command)
+                                                                     said-before)))))
+                       (t "neither a wake word nor commands heard: all of it is the command"))
+                 (car split) commands
+                 (if (eq kind 'command) "" (format " (%s)" kind)))))
+
+(defun earwig--split-at-wake-words (text)
+  "Return the parts of TEXT between the wake words in it, those with words.
+See `earwig--split-at-wake-word'."
+  (let (parts split)
+    (while (setq split (earwig--split-at-wake-word text))
+      (push (car split) parts)
+      (setq text (cdr split)))
+    (seq-filter #'earwig-heard-words-p (nreverse (cons (string-trim text) parts)))))
+
+(defun earwig--stream-woken-command (command kind &optional buffer)
+  "Run COMMAND, said after Pincer's wake word, as KIND says.
+KIND is as in `earwig--stream-commands'.  If it isn't a command, say so.
+In BUFFER, by default where the dictation goes."
+  (setq buffer (or buffer (marker-buffer earwig--stream-target)))
+  (cond
+   ((eq kind 'drop)
+    (earwig--log-message "Voice command dropped: %s" (earwig--command-text command)))
+   ((earwig--strip-cancel-word command)
+    (earwig--act-on-command command buffer))
+   ((and (eq kind 'if-complete) (not (earwig--command-complete-p command)))
+    (earwig--log-message "Voice command dropped, not complete: %s"
+                         (earwig--command-text command)))
+   ((earwig-find-commands command)
+    (earwig--act-on-command command buffer))
+   (t
+    (earwig--log-message "No voice command for \"%s\"" (earwig--command-text command)))))
 
 ;;;; Inserting
 
@@ -817,7 +1293,10 @@ end of a segment, as in \"Aura. Keat\"."
         (while (re-search-forward
                 (earwig--correction-regexp (car pair) "[.,;:!?]*[ \t\n]+") end t)
           (when (< (match-beginning 0) join (match-end 0))
-            (replace-match (earwig--match-case (match-string 0) (cdr pair)) t t)))))))
+            (let ((wrong (match-string-no-properties 0)))
+              (replace-match (earwig--match-case wrong (cdr pair)) t t)
+              (earwig--log "cleanup" "correction %S => %S across two segments: %S"
+                           (car pair) (cdr pair) wrong))))))))
 
 (defun earwig--stream-follow-point ()
   "Have the segments spoken from now on go where point is.
@@ -832,6 +1311,8 @@ stopped, everything has been spoken."
       (if (not (earwig--follow-point place))
           (set-marker place nil)
         (let ((start (earwig--stream-cut-at-move)))
+          (earwig--log "segment" "point moved: what's said from @%s goes to %s at %d"
+                       (earwig--log-seconds start) (marker-buffer place) (marker-position place))
           (if (and last (= (car last) start))
               ;; Moving again before anything was said there
               (progn
@@ -845,17 +1326,18 @@ stopped, everything has been spoken."
 If it has speech, it's cut at the quietest moment of the last 0.3 s
 measured, and queued; what's after that starts the next one.  Without
 any audio measured to cut, the segment being spoken is left whole, to
-go where point was."
+go where point was.  A command after Pincer's wake word isn't cut, but
+goes where point moved, where it runs anyway."
   (let ((frames (min 10 (/ (max 0 (- earwig--stream-read earwig--stream-segment-start))
                            earwig--stream-frame-bytes))))
     (cond
-     ((not earwig--stream-speech)
+     ((or (not earwig--stream-speech) (earwig--stream-command-segment-p))
       earwig--stream-segment-start)
      ((< frames 1)
       (1+ earwig--stream-segment-start))
      (t
       (let ((cut (earwig--stream-quietest earwig--stream-read frames)))
-        (earwig--stream-cut cut)
+        (earwig--stream-cut cut nil "as point moved")
         (earwig--stream-restart-segment cut)
         cut)))))
 
@@ -996,6 +1478,8 @@ unless point had moved.  Point follows the text."
   (remove-hook 'post-command-hook #'earwig--stream-point-moved)
   (setq earwig--stream-dir nil
         earwig--stream-flushed nil
+        earwig--stream-heard nil
+        earwig--stream-commands nil
         earwig--stream-overlay nil
         earwig--stream-join nil))
 

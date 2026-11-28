@@ -42,6 +42,7 @@
 (require 'subr-x)
 (require 'url-parse)
 (require 'earwig-platform)
+(require 'earwig-log)
 
 (defgroup earwig-speech-server nil
   "The separate speech server Earwig sends recordings to."
@@ -141,10 +142,27 @@ does once the model is loaded; that holds for one started outside
 Emacs too."
   (earwig-server--port-in-use-p))
 
-(defun earwig-server-transcribe (file callback)
+(defun earwig-server-transcribe (file callback &optional label)
   "Send the audio FILE to the server to transcribe; return the request process.
 When it's done, CALLBACK is called with whether it succeeded, and the
-transcription, or the error, as a string."
+transcription, or the error, as a string.  LABEL says what it is, for
+the log (`earwig-log'), which has how long it took for how much audio."
+  (if (not earwig-log)
+      (earwig-server--transcribe file callback)
+    (let ((start (float-time))
+          (audio (/ (max 0 (- (or (file-attribute-size (file-attributes file)) 44) 44))
+                    32000.0))
+          (label (or label (file-name-nondirectory file))))
+      (earwig--log "orukeet" "%s: %.2fs of audio sent" label audio)
+      (earwig-server--transcribe
+       file (lambda (ok output)
+              (earwig--log "orukeet" "%s: %s after %.2fs: %S" label (if ok "heard" "failed")
+                           (- (float-time) start) output)
+              (funcall callback ok output))))))
+
+(defun earwig-server--transcribe (file callback)
+  "Send FILE to the server; call CALLBACK with success and output.
+Return the request process.  See `earwig-server-transcribe'."
   (make-process
    :name "earwig-stt"
    :command (list "curl" "-s" "--fail-with-body"

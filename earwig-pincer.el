@@ -36,17 +36,23 @@
 ;;   before the key was pressed.  It streams as sox does.  Runs while
 ;;   `earwig-mode' is on.
 ;;
-;; - Voice commands after a wake word, with `earwig-listen-mode': the
-;;   command is recorded through it from `earwig-pincer-pre-roll'
-;;   seconds before the wake word was heard, so the wake word and what
-;;   follows are all there, however quickly they're said.  From then on
-;;   it's a voice command as one started with a command key: shown as
-;;   you say it, stopped at the pause after it (see
-;;   `earwig-pincer-command-pause'), and run.  What was transcribed up
-;;   to the wake word is dropped (`earwig-pincer-wake-words').  The
-;;   wake word does nothing while Earwig records or transcribes; while
-;;   dictating, the wake words work as `earwig-wake-words' do, after a
-;;   pause.  That's with any recorder.
+;; - Voice commands after a wake word, with `earwig-listen-mode'.  The
+;;   wake words are `earwig-wake-words', as they're transcribed; Pincer's
+;;   model must hear the same.  Outside dictation, the command is
+;;   recorded through Pincer from `earwig-pincer-pre-roll' seconds
+;;   before the wake word was heard, so the wake word and what follows
+;;   are all there, however quickly they're said.  From then on it's a
+;;   voice command as one started with a command key: shown as you say
+;;   it, stopped at the pause after it (`earwig-command-pause'), and
+;;   run.  What was transcribed up to the wake word is dropped.
+;;
+;;   While dictating with the `pincer' recorder, the wake word cuts the
+;;   dictation where it was said, without a pause first
+;;   (`earwig-stream-wake', earwig-stream.el): Pincer's positions are
+;;   bytes of the recording, less where it started (`from' in its
+;;   `started' event).  With another recorder, the wake words work as
+;;   when Pincer doesn't listen, after a pause.  The wake word does
+;;   nothing while Earwig transcribes a recording that has stopped.
 ;;
 ;; Either way, Pincer runs only while `earwig-mode' is on: turning that
 ;; off stops it, and with it `earwig-listen-mode'.
@@ -90,14 +96,6 @@ down isn't cut; with push-to-talk, recording only starts once the key
 is known to be held.  See `earwig-recorder'."
   :type 'number)
 
-(defcustom earwig-pincer-wake-words '("hey jarvis")
-  "The wake words Pincer's models hear, as transcribed.
-What's transcribed up to the first of them is dropped from the command,
-whatever the punctuation between their words.  With
-`earwig-listen-mode', they also give a command while dictating, as
-`earwig-wake-words' do."
-  :type '(repeat string))
-
 (defcustom earwig-pincer-pre-roll 1.5
   "Seconds before the wake word was heard that its command is recorded from.
 It's heard as it ends, or, said straight before a command, up to half a
@@ -106,20 +104,7 @@ of what was said before only costs transcribing it.  At most
 Pincer's --buffer, 3 s by default."
   :type 'number)
 
-(defcustom earwig-pincer-command-pause 1.0
-  "Seconds of silence that end a command given after the wake word.
-Once it's a complete command; as `earwig-command-auto-stop', which is
-used instead when set."
-  :type 'number)
-
-(defcustom earwig-pincer-log-events nil
-  "Non-nil to log what Earwig and Pincer say to each other.
-Each JSON line, with the time, goes to the buffer *earwig-pincer-events*:
-\"<\" before what Pincer wrote, \">\" before what Earwig sent it, and \"#\"
-before the command Pincer was started with and how it exited.  What
-Pincer writes to stderr is in `earwig-pincer-log'."
-  :type 'boolean)
-
+(defvar earwig-listen-mode)
 (defvar earwig-pincer--process nil "Pincer process.")
 (defvar earwig-pincer--ready nil "Non-nil once Pincer has said it's ready.")
 (defvar earwig-pincer--pending "" "Output of Pincer not yet a whole line.")
@@ -127,6 +112,8 @@ Pincer writes to stderr is in `earwig-pincer-log'."
   "The process standing for Pincer's recording, while it records.")
 (defvar earwig-pincer--started nil
   "Non-nil once Pincer has said it started the recording.")
+(defvar earwig-pincer--from 0
+  "Pincer's position where the recording starts: its first byte.")
 (defvar earwig-pincer--stopped-count 0
   "How many times Pincer has said a recording stopped.")
 (defvar earwig-pincer--timeout nil "Timer stopping a recording at `earwig-recording-timeout'.")
@@ -202,21 +189,10 @@ Signal an error if it isn't ready in 30 seconds."
       (process-send-string earwig-pincer--process (concat line "\n")))))
 
 (defun earwig-pincer--log (mark line)
-  "Log LINE after MARK to *earwig-pincer-events*, with `earwig-pincer-log-events'.
-Windows showing its end keep showing it."
-  (when earwig-pincer-log-events
-    (let ((buffer (get-buffer-create "*earwig-pincer-events*")))
-      (with-current-buffer buffer
-        (let ((at-end (cl-remove-if-not (lambda (window) (= (window-point window) (point-max)))
-                                        (get-buffer-window-list buffer nil t)))
-              (follow (= (point) (point-max))))
-          (save-excursion
-            (goto-char (point-max))
-            (insert (format-time-string "%T.%3N ") mark " " line "\n"))
-          (when follow
-            (goto-char (point-max)))
-          (dolist (window at-end)
-            (set-window-point window (point-max))))))))
+  "Log LINE after MARK, see `earwig-log'.
+MARK is \"<\" for what Pincer wrote, \">\" for what Earwig sent it, and
+\"#\" for Pincer starting and exiting."
+  (earwig--log (pcase mark ("<" "pincer<") (">" "pincer>") (_ "pincer")) "%s" line))
 
 ;;;###autoload
 (defun earwig-pincer-log ()
@@ -249,11 +225,14 @@ Windows showing its end keep showing it."
       ("ready"
        (setq earwig-pincer--ready t)
        (when (bound-and-true-p earwig-listen-mode)
-         (message "Listening for %s" (string-join earwig-pincer-wake-words " or "))))
+         (earwig-pincer--listening-message)))
       ("wake"
-       (when (bound-and-true-p earwig-listen-mode)
-         (earwig-pincer--wake .position)))
-      ("started" (setq earwig-pincer--started t))
+       (if (bound-and-true-p earwig-listen-mode)
+           (earwig-pincer--wake .position)
+         (earwig--log "wake" "ignored: listen mode is off")))
+      ("started"
+       (setq earwig-pincer--started t
+             earwig-pincer--from .from))
       ("stopped"
        (cl-incf earwig-pincer--stopped-count)
        (earwig-pincer--stopped))
@@ -270,10 +249,12 @@ Windows showing its end keep showing it."
     (setq earwig-pincer--ready nil)
     (earwig-pincer--stopped)
     (when (earwig-pincer--wanted-p)
-      (let ((output (earwig-pincer--stderr)))
-        (when (bound-and-true-p earwig-listen-mode)
+      (let ((output (earwig-pincer--stderr))
+            (listening (bound-and-true-p earwig-listen-mode)))
+        (when listening
           (setq earwig-listen-mode nil))
-        (message "Pincer stopped%s"
+        (message "%sPincer stopped%s"
+                 (if listening "Earwig listen mode off: " "")
                  (if (string-empty-p output) "" (concat ": " output)))))))
 
 ;;;; Recording: the `pincer' recorder, and commands after the wake word
@@ -290,7 +271,8 @@ run once the recording has stopped.  See the commentary."
                                  :sentinel sentinel)))
     (process-put proc 'earwig-stop #'earwig-pincer--stop-recording)
     (setq earwig-pincer--recording proc
-          earwig-pincer--started nil)
+          earwig-pincer--started nil
+          earwig-pincer--from 0)
     (earwig-pincer--send
      `((command . "start") (path . ,file) (format . ,(symbol-name format))
        ,(if from
@@ -341,10 +323,14 @@ Return nil, or what went wrong."
 ;;;###autoload
 (define-minor-mode earwig-listen-mode
   "Listen for a wake word, and give the voice command said after it.
-Starts `earwig-pincer-command', which keeps the microphone open.  Goes
-with `earwig-mode': turning this on turns that on, and turning that off
-turns this off.  Turned off, Pincer stops, unless it's the recorder
-\(`earwig-recorder').  See `earwig-pincer-wake-words'."
+Starts `earwig-pincer-command', which keeps the microphone open.
+`earwig-log' logs what Pincer and Earwig say to each other.  The
+wake words are `earwig-wake-words', which must be the words Pincer's
+model hears.  While dictating with Pincer as the recorder
+\(`earwig-recorder'), the wake word gives a command at any moment,
+without a pause first.  Goes with `earwig-mode': turning this on turns
+that on, and turning that off turns this off.  Turned off, Pincer
+stops, unless it's the recorder."
   :global t
   :group 'earwig-pincer
   (condition-case err
@@ -355,20 +341,42 @@ turns this off.  Turned off, Pincer stops, unless it's the recorder
         (earwig-pincer-update)
         (cond
          ((and earwig-listen-mode earwig-pincer--ready)
-          (message "Listening for %s" (string-join earwig-pincer-wake-words " or ")))
-         ((and (not earwig-listen-mode) (earwig-pincer--wanted-p))
-          (message "Pincer keeps the microphone open, as `earwig-recorder'"))))
+          (earwig-pincer--listening-message))
+         (earwig-listen-mode
+          (message "Earwig listen mode on: starting Pincer…"))
+         ((earwig-pincer--wanted-p)
+          (message "Earwig listen mode off; Pincer still records (earwig-recorder)"))
+         (t
+          (message "Earwig listen mode off"))))
     (error
      (setq earwig-listen-mode nil)
      (signal (car err) (cdr err)))))
 
+(defun earwig-pincer--listening-message ()
+  "Say that listen mode is on, and for which wake words."
+  (message "Earwig listen mode on: listening for %s"
+           (if earwig-wake-words
+               (mapconcat (lambda (words) (format "\"%s\"" words)) earwig-wake-words " or ")
+             "nothing: set `earwig-wake-words'")))
+
 (defun earwig-pincer--wake (position)
-  "Record the command after the wake word, heard at Pincer's POSITION."
+  "Act on the wake word, heard at Pincer's POSITION.
+While dictating through Pincer, cut the dictation there for the
+command (`earwig-stream-wake'); otherwise, unless Earwig records or
+transcribes, record the command after it."
   (cond
+   ((and (earwig-stream-recording-p)
+         (eq earwig--stream-process earwig-pincer--recording)
+         earwig-pincer--started)
+    (earwig-stream-wake (- position earwig-pincer--from)))
    ((or (earwig--recording-p) (earwig--record-transcribing-p) (earwig-stream-transcribing-p))
-    nil)
+    (earwig--log "wake" "ignored: %s"
+                 (cond ((earwig-stream-recording-p)
+                        "dictation records, but not through Pincer, so it isn't cut")
+                       ((earwig--recording-p) "a command or dictation records already")
+                       (t "the last recording is still being transcribed"))))
    ((not (earwig-server-ready-p))
-    (message "Wake word heard, but the speech server isn't running"))
+    (earwig--log-message "Wake word heard, but the speech server isn't running"))
    (t
     (let ((from (max 0 (- position (* 2 (round (* earwig-pincer-pre-roll 16000)))))))
       (with-current-buffer (window-buffer (selected-window))
@@ -377,17 +385,13 @@ turns this off.  Turned off, Pincer stops, unless it's the recorder
 
 (defun earwig-pincer-after-wake-word (raw)
   "Return the transcription RAW from after the first of the wake words on.
-RAW as it is if it has none of `earwig-pincer-wake-words'."
-  (let ((case-fold-search t)
-        (regexp (concat "\\<\\(?:"
-                        (mapconcat (lambda (words)
-                                     (replace-regexp-in-string
-                                      " +" "[[:punct:][:space:]]+" (regexp-quote words)))
-                                   earwig-pincer-wake-words "\\|")
-                        "\\)\\>[[:punct:]]*[[:space:]]*")))
-    (if (and earwig-pincer-wake-words (string-match regexp raw))
-        (substring raw (match-end 0))
-      raw)))
+Whatever the punctuation between the words of a wake word.  If RAW has
+none of `earwig-wake-words', as Orukeet heard it as something else
+\(\"Zella\", \"sell the\"), the commands it ends with
+\(`earwig--split-at-command'); RAW as it is if it ends with none."
+  (or (cdr (earwig--split-at-wake-word raw))
+      (cdr (earwig--split-at-command (earwig-clean raw)))
+      raw))
 
 (provide 'earwig-pincer)
 ;;; earwig-pincer.el ends here

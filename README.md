@@ -142,11 +142,11 @@ Push-to-talk is off until you turn it on with `(setopt earwig-push-to-talk t)`. 
 | Command while dictating | Pause, say "okay" and the command, pause, carry on                    | Editing without leaving dictation           |
 | Correction              | Put point after a misheard word and press Cmd-e                       | Fixing a mishearing for good                |
 
-- **Text appears as you talk**, grey until a pause, then final. A command said after "okay" shows in blue and runs at the next pause.
+- **Text appears as you talk**, grey until a pause, then final. A command said after "okay" shows in blue and runs at the pause after it, once it's complete.
 - **Dictation follows point:** click somewhere else, or say "okay, go before moonbase", and what you say next goes there.
-- **A voice command runs when you pause.** Recording stops after 1.5 seconds of silence once what you said is a complete command, or after 3 seconds if it isn't one yet. Tap Cmd-f again to run it sooner. To stop commands only with the key, set `(setopt earwig-command-auto-stop nil)`.
+- **A voice command runs when you pause.** Recording stops after 1.5 seconds of silence once what you said is a complete command (`earwig-command-pause`), or after 3 seconds if it isn't one yet (`earwig-unfinished-command-pause`). Tap Cmd-f again to run it sooner. To stop commands only with the key, set `(setopt earwig-command-key-stops-at-pause nil)`.
 - **Several commands in a row:** "select last sentence format bold", or with "and then" between them. End with "never mind" or "cancel" and nothing runs.
-- **Undo:** each command, and each stretch of dictation, is one undo step. "scratch that" or "undo" takes back the last dictation.
+- **Undo:** each command, and each stretch of dictation, is one undo step. "scratch that" or "undo" takes back the last dictation; "undo" again goes further back, rather than redoing.
 
 The manual has the details: [how a command is recognized](docs/manual.md#how-a-command-is-recognized), [commands while dictating](docs/manual.md#commands-while-dictating), and [streaming](docs/manual.md#streaming-and-provisional-text).
 
@@ -268,9 +268,11 @@ All options are in `M-x customize-group RET earwig RET`. These are the ones most
 | `earwig-push-to-talk-keys`                                     | Space                       | Keys held down to talk                                               |
 | `earwig-correct-keys`                                          | Cmd-e, keypad `.`           | Keys that correct a misheard word                                    |
 | `earwig-streaming`                                             | t                           | Show text while you talk (needs sox)                                 |
-| `earwig-stream-pause`                                          | 1.5                         | Seconds of silence that end a stretch of dictation                   |
+| `earwig-dictation-pause`                                       | 1.5                         | Seconds of silence that end a stretch of dictation                   |
 | `earwig-wake-word-commands`                                    | t                           | Give commands while dictating by saying "okay" first                 |
-| `earwig-command-auto-stop`                                     | 1.5                         | Seconds of silence that end a voice command; nil to stop it with its key |
+| `earwig-command-pause`                                         | 1.5                         | Seconds of silence after a complete voice command before it runs     |
+| `earwig-unfinished-command-pause`                              | 3                           | Seconds of silence that end a command that isn't complete yet        |
+| `earwig-command-key-stops-at-pause`                            | t                           | A command started with a key stops at the pause after it; nil to stop it with its key |
 | `earwig-provisional-command-display`                           | `buffer`                    | Show a command said while dictating in the buffer, or in the `echo-area` |
 | `earwig-flash`                                                 | t                           | Flash the text a command put in, moved or wrapped                    |
 | `earwig-dictation-structure`                                   | t                           | "new heading" and "new item" in dictation                            |
@@ -317,8 +319,8 @@ Run `M-x earwig-check-setup` first. Beyond what it finds:
 | The first words are cut off             | Install sox; ffmpeg starts recording late                                                               |
 | Holding the space bar only types spaces | Turn on `earwig-push-to-talk`, and turn off press and hold (Setup, step 3)                              |
 | The same word keeps coming out wrong    | Fix it once with Cmd-e; Earwig remembers it                                                             |
-| A voice command does nothing            | It runs once you stop it: pause, or tap Cmd-f again. With `earwig-command-auto-stop` nil, only the key stops it |
-| A command runs before you've finished   | Say it without pausing, or raise `earwig-command-auto-stop`; commands that take any words, like "select WORDS", are complete after the first word |
+| A voice command does nothing            | It runs once you stop it: pause, or tap Cmd-f again. With `earwig-command-key-stops-at-pause` nil, only the key stops it |
+| A command runs before you've finished   | Say it without pausing, or raise `earwig-command-pause`; commands that take any words, like "select WORDS", are complete after the first word |
 | A command isn't recognized              | Say "what can I say"; all of what you say has to read as commands                                       |
 | "this sentence" is the whole paragraph  | `(setopt sentence-end-double-space nil)`, unless you end sentences with two spaces                      |
 

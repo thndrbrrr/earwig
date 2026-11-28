@@ -1,6 +1,6 @@
 # Always-listening wake word (partly built)
 
-The helper and a first version of Earwig's side exist (see the two "Built so far" sections). The microphone would stay open all the time, and saying a
+The helper and a first version of Earwig's side exist (see the "Built so far" sections). The microphone would stay open all the time, and saying a
 wake word such as "Zelda" would give a command at any moment, without a key, or add a command
 during dictation. A dedicated wake-word detector, openWakeWord, would listen instead of the
 speech server, in one helper process that records the microphone and hands the audio over to
@@ -24,8 +24,8 @@ still change when Earwig's side is built:
   the helper, decides whether and from where to record.
 - **It writes only while recording**, so the file doesn't grow while nobody dictates; the ring
   buffer covers the time before.
-- **Wake words are reported while recording too**, for
-  [commands-without-pause.md](commands-without-pause.md).
+- **Wake words are reported while recording too**, for commands while dictating (see "Built so
+  far: commands while dictating").
 - `--device` takes the names `earwig-input-device` does; `--input file.wav --realtime` stands in
   for the microphone in tests, as `earwig--stream-input` does for sox.
 
@@ -48,20 +48,18 @@ Intel Mac wheels):
 records a voice command from `earwig-pincer-pre-roll` (1.5 s) before the detection, as a WAV
 file the helper writes (`"format": "wav"`). From there it is a command as one started with a
 command key (`earwig--record` with its WAKE argument): previewed, stopped at the pause after a
-complete command (`earwig-pincer-command-pause`, 1 s, or `earwig-command-auto-stop`), and run.
+complete command (`earwig-command-pause`, 1.5 s), and run.
 
 - **The recording is still a process.** Earwig's recording code is built around a recorder
   process (live while recording, its sentinel acting on the recording). A pipe process stands
   for the helper's recording: `earwig--stop-recorder` calls its `earwig-stop` property, which
   sends `stop`; on `stopped` it's deleted, and `earwig--recorder-stopped-p` counts that as
   stopped, not failed.
-- **What's transcribed up to the wake word is dropped** (`earwig-pincer--after-wake-word`,
-  `earwig-pincer-wake-words`, "hey jarvis" for now), as the recording starts before it.
-  (Agreed since: `earwig-pincer-wake-words` goes, the wake words are declared once in
-  `earwig-wake-words`; see [commands-without-pause.md](commands-without-pause.md), "One
-  wake-word setting".)
-- **Pincer's wake words also work while dictating**, after a pause, as "okay" does
-  (`earwig--wake-words`).
+- **What's transcribed up to the wake word is dropped** (`earwig-pincer-after-wake-word`), as
+  the recording starts before it. The wake words are declared once, in `earwig-wake-words`
+  (agreed): the user sets them to the words of Pincer's model (`'("hey jarvis")`), and Earwig
+  doesn't check. A separate `earwig-pincer-wake-words` was built first and has gone (never
+  released).
 - Keys still record with sox; so question 4 below is still open. (Since settled: see "Built
   so far: Pincer as a recorder".)
 
@@ -98,10 +96,66 @@ earwig-pincer.el, and the shared code only asks which recorder it is, in four pl
 - **The microphone** is `earwig-input-device`, passed as `--device` when the helper starts; a
   change takes effect when it next starts.
 - **Starting it says so**, with the whole command, shell-quoted ("Starting Pincer: …"). With
-  `earwig-pincer-log-events`, the JSON lines both ways are logged, with the time, to
-  *earwig-pincer-events* (`<` Pincer's, `>` Earwig's, `#` the start command and the exit).
+  `earwig-log`, the JSON lines both ways are logged, with the time, to *earwig-log*
+  (`pincer<` Pincer's, `pincer>` Earwig's, `pincer` the start command and the exit), with
+  what Earwig made of them.
 
 This settles question 4: keep sox (or ffmpeg) unless `earwig-recorder` is `pincer`.
+
+## Built so far: commands while dictating
+
+With the `pincer` recorder and `earwig-listen-mode`, Pincer's wake word gives a command while
+dictating without a pause before it (see the manual, "Commands after a wake word", and the
+commentary of earwig-stream.el). On a `wake` event, `earwig-stream-wake` makes the segment
+being spoken a command segment of the same recording and request queue
+(`earwig--stream-commands`), which ends at `earwig-command-pause` once complete, running as its
+provisional text has it, or at `earwig-unfinished-command-pause`. It's cut from the dictation
+before only at a pause of 0.2 s or more ending 0.4 s before where Pincer heard the wake word
+(`earwig--stream-wake-cut`); otherwise its text is split at the wake word
+(`earwig--stream-woken-split`), or, when Orukeet hears it as something else, where the commands
+the text ends with begin, dropping a sound-alike before them ("sell the", "cell to" for
+"Zelda", by a rough consonant key, `earwig--sound-key`). What's before goes in as dictation;
+what isn't a command gives a message.
+
+The first version cut the audio at the quietest frame 1.5 s to 0.7 s before the detection,
+suggested for "hey jarvis". With "Zelda" said without a pause, that cut fell 0.4–0.8 s before
+the word, inside the last dictated word, and Orukeet transcribed both halves badly: in 6 of 6
+`say` voices the dictation came out wrong ("This is a query.", "This is okay.") and in 2 the
+command too ("Test louder delete last word."). Transcribed whole, "Zelda" came out right in 5
+of 6 and as "cell to" in the sixth; with the text split, all 6 were right. Measured with the
+user's Zelda model (threshold 0.2): heard 0.43–0.45 s after the word began, within 0.1 s of its
+end, in the 2 of 6 voices it heard at all. Without Pincer, a
+command found by its wake word in the transcription also ends at `earwig-command-pause` once
+complete (`earwig-wake-word-commands-end-at-pause`). The pause settings were renamed with it
+(`earwig-dictation-pause`, `earwig-command-pause`, `earwig-unfinished-command-pause`,
+`earwig-command-key-stops-at-pause`), a clean break, as the changelog says.
+
+Agreed while designing it, and kept for reference:
+
+- **The command is a segment of the dictation, not a recording of its own**: Pincer records one
+  file at a time, so a recording of its own would end the dictation; its requests would bypass
+  the stream's queue, losing the order (the dictation before must be in before the command
+  runs) and competing for the server. Pincer writing several files, and stopping and restarting
+  the dictation, were rejected for the same reasons.
+- **Splitting the final text at "okay"** when a complete command follows it: not now, as "okay"
+  is common in dictation; Earwig splits text only where Pincer heard the wake word.
+- **The audio stays in files**: the cost is in the model, not in the files; a pipe would block
+  Pincer while Emacs is busy; cuts and provisional passes read back into the past.
+
+Tested with `say` through Pincer (`--input --realtime`) and the server
+(`earwig-test-listen-while-dictating`): "This is the first sentence. Hey Jarvis, go to top.",
+said without a pause, went in as "This is the first sentence." and the command.
+
+Still open:
+
+- **The pause numbers** (0.2 s of quiet, ending 0.4 s before the detection) are from `say`, not
+  the live microphone. A debug option in Pincer that logs every block's score was agreed for
+  measuring (not built).
+- **The sound-alike key** is rough: "sold" sounds like "Zelda" to it. It only applies where
+  Pincer heard the wake word and no transcribed wake word was found.
+- **Not tested with the live microphone:** the latency of detections, and false detections. The
+  user saw "Zelda", or a sound-alike ("sell the"), left in the dictation or the command with the
+  first version; not tried again since.
 
 ## Background: why not the speech server
 
@@ -181,10 +235,10 @@ mic ──► helper (e.g. Python: sounddevice + openWakeWord)
   `earwig-wake-words` (now `'("okay" "ok")`, earwig-commands.el) lets `earwig--strip-wake-word`
   and the command handling do the rest. The alternative is to start the audio after the wake
   word and run what follows as a command directly.
-- **During dictation, cut at the wake word** (since agreed as the preferred approach; designed in
-  [commands-without-pause.md](commands-without-pause.md)). The helper keeps listening on the same audio. On
+- **During dictation, cut at the wake word** (since built, see "Built so far: commands while
+  dictating"). The helper keeps listening on the same audio. On
   "Zelda" it tells Earwig the offset, and Earwig cuts the segment being spoken there (as
-  `earwig--stream-cut` does at a pause) instead of waiting for `earwig-stream-pause` of
+  `earwig--stream-cut` does at a pause) instead of waiting for `earwig-dictation-pause` of
   silence. The command goes through at once, and more reliably than finding "okay" in the
   transcription.
 - **The helper also records ordinary dictation**, so there's one recorder whether dictation

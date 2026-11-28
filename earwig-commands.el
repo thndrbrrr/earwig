@@ -62,7 +62,13 @@
 (declare-function earwig--mode-keys "earwig" (mode))
 
 (defcustom earwig-wake-words '("okay" "ok")
-  "Words that give a command while dictating, see `earwig-wake-word-commands'."
+  "Wake words: words that give a command while dictating.
+See `earwig-wake-word-commands'.  A wake word may be several words, as
+\"hey jarvis\", and there may be several.  With `earwig-listen-mode',
+they're also the words Pincer listens for, as they're transcribed:
+set them to the words of Pincer's model (`earwig-pincer-command'),
+e.g. \='(\"hey jarvis\") for the pre-trained hey_jarvis model.  Earwig
+doesn't check that they match."
   :type '(repeat string)
   :group 'earwig)
 
@@ -71,11 +77,13 @@
 Dictation carries on around them: pause, say \"okay, scratch that\" or a
 chain such as \"okay, select last sentence and then cut that\", pause,
 and keep dictating, where point is then.  With `earwig-streaming' this
-works at every pause (see `earwig-stream-pause'), otherwise only at the
-start of a recording.  The wake words are `earwig-wake-words'.  If no
-command matches, what was said is inserted as dictation.  Recordings
-made with a command key are commands either way; nil makes a dictation
-key only ever dictate."
+works at every pause (see `earwig-dictation-pause'), otherwise only at
+the start of a recording; with Pincer listening (`earwig-listen-mode')
+and recording (`earwig-recorder'), at any moment, without a pause
+first.  The wake words are `earwig-wake-words'.  If no command matches,
+what was said is inserted as dictation, unless Pincer heard the wake
+word.  Recordings made with a command key are commands either way; nil
+makes a dictation key only ever dictate."
   :type 'boolean
   :group 'earwig)
 
@@ -100,27 +108,38 @@ START and END are markers; set by earwig.el.")
 
 ;;;; Wake and cancel words
 
-(defvar earwig-listen-mode)
-(defvar earwig-pincer-wake-words)
-
-(defun earwig--wake-words ()
-  "Return the wake words: `earwig-wake-words', and Pincer's when it listens.
-See `earwig-pincer-wake-words'."
-  (append earwig-wake-words
-          (and (bound-and-true-p earwig-listen-mode) earwig-pincer-wake-words)))
+(defun earwig--wake-word-regexp (between)
+  "Return a regexp matching one of `earwig-wake-words', as a whole word.
+BETWEEN matches what may come between the words of a wake word of
+several, as the punctuation Orukeet may put there."
+  (concat "\\<\\(?:"
+          (mapconcat (lambda (words)
+                       (replace-regexp-in-string " +" between (regexp-quote words) t t))
+                     earwig-wake-words "\\|")
+          "\\)\\>"))
 
 (defun earwig--strip-wake-word (text)
   "Return TEXT after a leading wake word, or nil if it doesn't start with one.
 A wake word of several words may have punctuation between them."
   (let ((case-fold-search t))
-    (when (string-match (concat "\\`[ \t]*\\<\\(?:"
-                                (mapconcat (lambda (words)
-                                             (replace-regexp-in-string
-                                              " +" "[,.!]?[ \t]+" (regexp-quote words)))
-                                           (earwig--wake-words) "\\|")
-                                "\\)\\>[,.!]?[ \t]+")
-                        text)
+    (when (and earwig-wake-words
+               (string-match (concat "\\`[ \t]*" (earwig--wake-word-regexp "[,.!]?[ \t]+")
+                                     "[,.!]?[ \t]+")
+                             text))
       (substring text (match-end 0)))))
+
+(defun earwig--split-at-wake-word (text)
+  "Return (BEFORE . AFTER), TEXT around the first wake word in it, or nil.
+AFTER is from after the wake word and the punctuation and space after
+it; BEFORE is up to it, trimmed.  A wake word of several words may have
+any punctuation between them.  See `earwig-wake-words'."
+  (let ((case-fold-search t))
+    (when (and earwig-wake-words
+               (string-match (concat (earwig--wake-word-regexp "[[:punct:][:space:]]+")
+                                     "[[:punct:]]*[[:space:]]*")
+                             text))
+      (cons (string-trim (substring text 0 (match-beginning 0)))
+            (substring text (match-end 0))))))
 
 (defun earwig--strip-cancel-word (text)
   "Return (BEFORE . WORD) if TEXT ends with one of `earwig-cancel-words'.
@@ -381,9 +400,11 @@ With `consult-line' if it's installed, else with isearch."
   (call-interactively #'save-buffer))
 
 (earwig-defcommand earwig-say-undo ("undo" (? "that"))
-  "Undo."
+  "Undo, further back each time: never a redo, as `undo' said again is.
+Each voice command is a command of its own to Emacs, so `undo' would
+start over each time, and undo the undo before."
   :help "undo [that]"
-  (call-interactively #'undo))
+  (call-interactively #'undo-only))
 
 (earwig-defcommand earwig-say-redo "redo"
   "Redo."

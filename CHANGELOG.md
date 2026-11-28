@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Changes to check
+
+- **The pause settings are renamed**, after what you do rather than how Earwig works, with no aliases. If you set any, set the new one instead:
+  - `earwig-stream-pause` is now `earwig-dictation-pause`.
+  - `earwig-command-auto-stop` is now `earwig-command-pause`. Set to nil, it stopped commands only with their key: that's `(setopt earwig-command-key-stops-at-pause nil)` now.
+  - `earwig-command-auto-stop-incomplete` is now `earwig-unfinished-command-pause`.
+- **One log:** `earwig-log-transcriptions` and `earwig-log-commands` are gone; set `earwig-log` instead, and `M-x earwig-show-log` shows it. Transcriptions and commands are logged to *earwig-log* now, not *Messages*.
+
+### New
+
+- **Commands while dictating run once complete.** After "okay", a complete command runs after `earwig-command-pause` of silence, as its provisional text has it, without being transcribed again. `earwig-wake-word-commands-end-at-pause` turns it off.
+- **No pause before a command while dictating, with Pincer (experimental).** With `earwig-listen-mode` and `pincer` as `earwig-recorder`, the wake word cuts the dictation where you said it and starts a command, even in the same breath. The wake words are `earwig-wake-words` then, and must be the words of Pincer's model. See [Commands after a wake word](docs/manual.md#commands-after-a-wake-word-experimental), with `earwig-wake-word-keeps-provisional-text` and `earwig-repeated-wake-word`.
+
+- **A log of what Earwig hears and does** (`earwig-log`, `M-x earwig-show-log`): each transcription with how long it took for how much audio, where dictation was cut and why, each step of the cleanup that changed a transcription (filler words, corrections, spoken punctuation, fitting it to where it goes), the wake word and how a command was told from the dictation, Pincer's events, and the commands run, each with the time. See [The log](docs/manual.md#the-log).
+
+### Fixed
+
+- **"undo" said twice** undid and then redid, as each voice command starts a new undo sequence. It now goes further back each time; "redo" redoes.
+
 ## 0.3.0
 
 Voice commands are now rules of a [phony.el](https://github.com/ErikPrantare/phony.el) grammar instead of regexps. That makes commands combine more freely, but changes how you write commands of your own.

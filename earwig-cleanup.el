@@ -35,6 +35,7 @@
 
 (require 'seq)
 (require 'electric)
+(require 'earwig-log)
 
 (defcustom earwig-filler-words
   '("um" "umm" "uh" "uhh" "uhm" "ah" "ahh" "er" "erm" "hm" "hmm" "mm")
@@ -145,12 +146,31 @@ SEPARATOR is the regexp between the words instead, if given.  Use with
   "Return TEXT with `earwig-corrections' applied.
 WRONG matches whole words, ignoring case.  With COMMANDS, apply
 `earwig-corrections-commands' instead."
+  (dolist (pair (earwig--corrections commands) text)
+    (setq text (earwig--apply-correction pair text))))
+
+(defun earwig--apply-correction (pair text)
+  "Return TEXT with the correction PAIR, (WRONG . RIGHT), applied."
   (let ((case-fold-search t))
-    (dolist (pair (earwig--corrections commands) text)
-      (setq text (replace-regexp-in-string
-                  (earwig--correction-regexp (car pair))
-                  (lambda (match) (earwig--match-case match (cdr pair)))
-                  text t t)))))
+    (replace-regexp-in-string (earwig--correction-regexp (car pair))
+                              (lambda (match) (earwig--match-case match (cdr pair)))
+                              text t t)))
+
+(defun earwig--log-clean (text &optional commands)
+  "Log what `earwig-clean' does to TEXT, a step a line; see `earwig-log'.
+The filler words it drops, and each correction that changes it.  With
+COMMANDS, each of `earwig-corrections-commands' that does instead.
+Return TEXT as cleaned up."
+  (let ((clean (if commands text (earwig-remove-fillers text))))
+    (unless commands
+      (earwig--log-change "filler words dropped" text clean))
+    (dolist (pair (earwig--corrections commands) clean)
+      (let ((corrected (earwig--apply-correction pair clean)))
+        (earwig--log-change (format "%s %S => %S"
+                                    (if commands "command correction" "correction")
+                                    (car pair) (cdr pair))
+                            clean corrected)
+        (setq clean corrected)))))
 
 (defun earwig--replace-in-buffer (wrong right skip-beg skip-end)
   "Replace WRONG with RIGHT throughout the buffer, as whole words.

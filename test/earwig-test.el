@@ -513,74 +513,116 @@ Can’t parse number \"lots\": \"lots\" is no number")))))
     (should (equal ran (list #'earwig--run-command-in "delete last word and then go to top."
                              (current-buffer))))))
 
+(defmacro earwig-test-logging (&rest body)
+  "Run BODY with `earwig-log' on and an empty log."
+  `(let ((earwig-log t))
+     (when (get-buffer earwig--log-buffer)
+       (kill-buffer earwig--log-buffer))
+     (unwind-protect
+         (progn ,@body)
+       (when (get-buffer earwig--log-buffer)
+         (kill-buffer earwig--log-buffer)))))
+
+(defun earwig-test-log-lines (&optional what)
+  "Return the log's lines, without their time; only those about WHAT, if given."
+  (when (get-buffer earwig--log-buffer)
+    (with-current-buffer earwig--log-buffer
+      (let (lines)
+        (goto-char (point-min))
+        (while (re-search-forward "^[0-9:.]+ \\(\\([^ ]+\\) +\\(.*\\)\\)$" nil t)
+          (when (or (null what) (equal (match-string 2) what))
+            (push (if what (match-string 3) (match-string 1)) lines)))
+        (nreverse lines)))))
+
+(ert-deftest earwig-test-log ()
+  "The log has the time, what each line is about, and keeps faces."
+  (earwig-test-logging
+   (earwig--log "orukeet" "%s: %.2fs" "segment [0.00s–1.00s]" 1.0)
+   (earwig--log-insert "command" (propertize "▶ go" 'face 'bold))
+   (with-current-buffer earwig--log-buffer
+     (should (string-match-p "\\`[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\\.[0-9]\\{3\\} orukeet   segment"
+                             (buffer-string)))
+     (goto-char (point-min))
+     (search-forward "▶")
+     (should (eq (get-text-property (1- (point)) 'face) 'bold))))
+  ;; Nothing when off, not even the arguments
+  (let ((earwig-log nil))
+    (earwig--log "x" "%s" (error "Evaluated"))
+    (should-not (get-buffer earwig--log-buffer))))
+
 ;; As its provisional text shows, with a command key or after a wake word
 (ert-deftest earwig-test-log-commands ()
-  (let ((earwig-log-commands t)
-        (earwig-wake-word-commands t)
+  (let ((earwig-wake-word-commands t)
         (earwig-provisional-icons t)
         (earwig-provisional-chain-mark nil)
-        (earwig-command-icon "▶")
-        (start (with-current-buffer (messages-buffer) (point-max))))
-    (cl-flet ((logged ()
-                (with-current-buffer (messages-buffer)
-                  (prog1 (seq-filter (lambda (line) (string-prefix-p "Voice command" line))
-                                     (split-string (buffer-substring start (point-max)) "\n" t))
-                    (setq start (point-max))))))
-      (cl-letf (((symbol-function 'run-at-time) #'ignore)
-                ((symbol-function 'earwig--stream-command-heard) #'ignore))
-        (earwig-test-buffer "|" #'fundamental-mode
-          (let ((earwig--mode 'dictate))
-            (earwig--process-text "Okay, select last sentence, and then cut that."
-                                  (current-buffer) (point))
-            ;; Dictation isn't logged
-            (earwig--process-text "Hello there." (current-buffer) (point)))
-          (let ((earwig--mode 'command))
-            (earwig--process-text "Go to top, never mind." (current-buffer) (point))))
-        (let ((lines (logged)))
-          (should (equal (mapcar #'substring-no-properties lines)
-                         '("Voice command: ▶ select last sentence ▶ cut that"
-                           "Voice command: ▶ Go to top never mind"
-                           "Voice command cancelled: Go to top")))
-          ;; With the faces of the provisional text
-          (should (eq (get-text-property 15 'face (car lines)) 'earwig-mode-line-command))
-          (should (memq :strike-through
-                        (flatten-tree (get-text-property 17 'face (nth 1 lines))))))
-        ;; Off by default
-        (let ((earwig-log-commands (eval (car (get 'earwig-log-commands 'standard-value))))
-              (earwig--mode 'command))
-          (earwig-test-buffer "|" #'fundamental-mode
-            (earwig--process-text "Go to top." (current-buffer) (point))))
-        (should-not (logged))))))
+        (earwig-command-icon "▶"))
+    (earwig-test-logging
+     (cl-letf (((symbol-function 'run-at-time) #'ignore)
+               ((symbol-function 'earwig--stream-command-heard) #'ignore)
+               ((symbol-function 'message) #'ignore))
+       (earwig-test-buffer "|" #'fundamental-mode
+         (let ((earwig--mode 'dictate))
+           (earwig--process-text "Okay, select last sentence, and then cut that."
+                                 (current-buffer) (point))
+           ;; Dictation isn't a command
+           (earwig--process-text "Hello there." (current-buffer) (point)))
+         (let ((earwig--mode 'command))
+           (earwig--process-text "Go to top, never mind." (current-buffer) (point)))))
+     (should (equal (earwig-test-log-lines "command")
+                    '("▶ select last sentence ▶ cut that" "▶ Go to top never mind")))
+     (should (equal (earwig-test-log-lines "message") '("Voice command cancelled: Go to top")))
+     ;; With the faces of the provisional text
+     (with-current-buffer earwig--log-buffer
+       (goto-char (point-min))
+       (search-forward "▶ select")
+       (should (eq (get-text-property (- (point) 8) 'face) 'earwig-mode-line-command))
+       (search-forward "Go to top")
+       (should (memq :strike-through (flatten-tree (get-text-property (1- (point)) 'face))))))))
 
 ;; As Orukeet wrote it, and what it gave
 (ert-deftest earwig-test-log-transcriptions ()
-  (let ((earwig-log-transcriptions t)
-        (earwig-wake-word-commands t)
+  (let ((earwig-wake-word-commands t)
+        (earwig--mode 'dictate))
+    (earwig-test-logging
+     (cl-letf (((symbol-function 'message) #'ignore)
+               ((symbol-function 'run-at-time) #'ignore))
+       (earwig-test-buffer "|" #'fundamental-mode
+         (should (equal (earwig--process-text "Kurt said, comma quote, hi quote." (current-buffer)
+                                              (point))
+                        "Kurt said, \"Hi.\""))
+         (should-not (earwig--process-text "Okay, go to top." (current-buffer) (point)))
+         (let ((buffer-read-only t))
+           (earwig--process-text "Hi." (current-buffer) (point)))))
+     (should (equal (earwig-test-log-lines "heard")
+                    '("\"Kurt said, comma quote, hi quote.\" => \"Kurt said, \\\"Hi.\\\"\""
+                      "\"Okay, go to top.\" => command"
+                      "\"Hi.\" => nothing inserted"))))))
+
+(ert-deftest earwig-test-log-cleanup ()
+  "Each step of the cleanup that changes what Orukeet wrote is logged."
+  (let ((earwig-wake-word-commands t)
         (earwig--mode 'dictate)
-        messages)
-    (cl-letf (((symbol-function 'message)
-               (lambda (format &rest args) (push (apply #'format format args) messages)))
-              ((symbol-function 'run-at-time) #'ignore))
-      (earwig-test-buffer "|" #'fundamental-mode
-        (should (equal (earwig--process-text "Kurt said, comma quote, hi quote." (current-buffer)
-                                             (point))
-                       "Kurt said, \"Hi.\""))
-        (should-not (earwig--process-text "Okay, go to top." (current-buffer) (point)))
-        (let ((buffer-read-only t))
-          (earwig--process-text "Hi." (current-buffer) (point)))))
-    (should (equal (reverse messages)
-                   '("Orukeet: \"Kurt said, comma quote, hi quote.\" => \"Kurt said, \\\"Hi.\\\"\""
-                     "Orukeet: \"Okay, go to top.\" => command"
-                     "Buffer is read-only, dictation not inserted: Hi."
-                     "Orukeet: \"Hi.\" => nothing inserted")))
-    ;; Off by default
-    (setq messages nil)
-    (let ((earwig-log-transcriptions nil))
-      (cl-letf (((symbol-function 'message)
-                 (lambda (format &rest args) (push (apply #'format format args) messages))))
-        (earwig-test-buffer "|" #'fundamental-mode
-          (earwig--process-text "Hi." (current-buffer) (point)))))
-    (should-not messages)))
+        (earwig-corrections '(("moon base" . "moonbase")))
+        (earwig-corrections-commands '(("guru line" . "go to line"))))
+    (earwig-test-logging
+     (cl-letf (((symbol-function 'message) #'ignore)
+               ((symbol-function 'run-at-time) #'ignore))
+       (earwig-test-buffer "It is here|\nMore." #'fundamental-mode
+         (earwig--process-text "Um, the moon base, comma, is fine." (current-buffer) (point))
+         (earwig--process-text "Okay, guru line three." (current-buffer) (point))
+         ;; Nothing to log for a command that needs no cleanup
+         (earwig--process-text "Okay, go to top." (current-buffer) (point)))
+       (earwig-test-buffer "It is here.|" #'fundamental-mode
+         (earwig--process-text "Comma, and more." (current-buffer) (point))))
+     (should (equal (earwig-test-log-lines "cleanup")
+                    '("filler words dropped: \"Um, the moon base, comma, is fine.\" → \"The moon base, comma, is fine.\""
+                      "correction \"moon base\" => \"moonbase\": \"The moon base, comma, is fine.\" → \"The moonbase, comma, is fine.\""
+                      "spoken punctuation and formatting: \"The moonbase, comma, is fine.\" → \"The moonbase, is fine.\""
+                      "fitted to where it goes: \"The moonbase, is fine.\" → \" the moonbase, is fine.\""
+                      "command correction \"guru line\" => \"go to line\": \"guru line three.\" → \"go to line three.\""
+                      "the command corrections are used, as it reads only with them"
+                      "spoken punctuation and formatting: \"Comma, and more.\" → \", and more.\""
+                      "what's before it in the buffer: \"It is here.\" → \"It is here\""))))))
 
 (ert-deftest earwig-test-parse-number ()
   (dolist (case '(("42" . 42) ("forty two" . 42) ("Forty-Two" . 42) ("forty 2" . 42)
@@ -2007,7 +2049,7 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
                      (apply #'concat (make-list (* (car run) 240) (concat one other)))))
                  runs)))
 
-(ert-deftest earwig-test-command-auto-stop ()
+(ert-deftest earwig-test-command-pause ()
   "A command recorded with a tap stops at a pause after it's complete."
   (let* ((file (make-temp-file "earwig-test-" nil ".wav"))
          (audio nil)
@@ -2021,8 +2063,9 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
          (earwig--record-file file)
          (earwig--record-process 'recorder)
          (earwig--stream-pushed-to-talk nil)
-         (earwig--record-auto-stop 1.0)
-         (earwig-command-auto-stop-incomplete 2.0)
+         (earwig--record-auto-stop t)
+         (earwig-command-pause 1.0)
+         (earwig-unfinished-command-pause 2.0)
          (earwig--auto-stop-timer nil)
          (earwig--auto-stop-read 0)
          (earwig--auto-stop-levels nil)
@@ -2138,6 +2181,11 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
          (earwig--stream-provisional-end 0)
          (earwig--stream-provisional-duration 0)
          (earwig--stream-curl nil)
+         (earwig--stream-heard nil)
+         (earwig--stream-commands nil)
+         (earwig--stream-heard-cache nil)
+         (earwig--stream-count 0)
+         (earwig--command-heard nil)
          (earwig--last-dictation nil)
          (earwig--mode 'dictate))
      (unwind-protect
@@ -2299,7 +2347,7 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
            sent)
        (write-region (make-string 64000 0) nil (earwig--stream-raw) nil 'silent)
        (cl-letf (((symbol-function 'earwig--stream-request)
-                  (lambda (_file _callback) (push (float-time) sent))))
+                  (lambda (_file _callback &optional _label) (push (float-time) sent))))
          (setq earwig--stream-speech t)
          ;; Speech ended before the audio the last pass reached
          (setq earwig--stream-speech-end 30000
@@ -2343,58 +2391,142 @@ Alternating between plus and minus AMPLITUDE, as a unibyte string."
 (require 'earwig-pincer)
 
 (ert-deftest earwig-test-listen-wake-words ()
-  "Pincer's wake words: what's said up to them is dropped."
-  (let ((earwig-pincer-wake-words '("hey jarvis" "zelda")))
+  "The wake words, one setting: what's said up to them is dropped."
+  (let ((earwig-wake-words '("hey jarvis" "zelda")))
     (should (equal (earwig-pincer-after-wake-word "Before. Hey, Jarvis! Delete that.")
                    "Delete that."))
     (should (equal (earwig-pincer-after-wake-word "zelda go to top") "go to top"))
     ;; Not part of a word
     (should (equal (earwig-pincer-after-wake-word "Zeldas go") "Zeldas go"))
     (should (equal (earwig-pincer-after-wake-word "Delete that.") "Delete that."))
-    ;; They give commands while dictating too, but only while listening
-    (let ((earwig-listen-mode nil))
-      (should-not (earwig--strip-wake-word "Hey Jarvis, delete that")))
-    (let ((earwig-listen-mode t))
+    ;; Heard as something else: the commands it ends with
+    (should (equal (earwig-pincer-after-wake-word "Zella go to top.") "go to top."))
+    (should (equal (earwig-pincer-after-wake-word "Before. Sell the go to top") "go to top"))
+    (should (equal (earwig--split-at-wake-word "So that's it. Hey, Jarvis! Go to top.")
+                   '("So that's it." . "Go to top.")))
+    (should (equal (earwig--split-at-wake-word "Zelda.") '("" . "")))
+    (should-not (earwig--split-at-wake-word "Okay, go to top."))
+    ;; The same words give commands while dictating, listening or not
+    (dolist (earwig-listen-mode '(nil t))
       (should (equal (earwig--strip-wake-word "Hey, Jarvis, delete that") "delete that"))
-      (should (equal (earwig--strip-wake-word "Okay, delete that") "delete that")))))
+      (should-not (earwig--strip-wake-word "Okay, delete that"))))
+  (let ((earwig-wake-words nil))
+    (should-not (earwig--strip-wake-word "Okay, delete that"))
+    (should-not (earwig--split-at-wake-word "Okay, delete that"))))
+
+(ert-deftest earwig-test-listen-wake-word-again ()
+  "Outside dictation too, the wake word said again starts the next command."
+  (with-temp-buffer
+    (set-window-buffer nil (current-buffer))
+    (insert "One\nTwo\nThree")
+    (let ((earwig-wake-words '("zelda"))
+          (earwig-repeated-wake-word 'next-command)
+          (earwig--mode 'command)
+          (earwig--record-file nil)
+          (earwig--record-wake 0)
+          (earwig--preview-heard nil)
+          (earwig--auto-stop-speech-end 0)
+          later messages)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args) (push (cons function args) later)))
+                ((symbol-function 'message)
+                 (lambda (format &rest args)
+                   (when format (push (apply #'format format args) messages)))))
+        ;; Heard as complete once the last command is
+        (setq earwig--preview-heard (cons "Before. Zelda, go to line, Zelda, go to top." 1))
+        (should (earwig--command-heard-complete-p))
+        (setq earwig--preview-heard (cons "Zelda, go to top, Zelda, go to line" 1))
+        (should-not (earwig--command-heard-complete-p))
+        ;; Not complete before it: dropped, and the next one runs
+        (let ((earwig--record-target (point-marker)))
+          (earwig--record-transcribed t "Before. Zelda, go to line, Zelda, go to top."))
+        (dolist (call (reverse later))
+          (apply call))
+        (should (= (point) 1))
+        (should (member "Voice command dropped, not complete: go to line" messages))
+        ;; Complete before it: both run
+        (setq later nil)
+        (goto-char (point-max))
+        (let ((earwig--record-target (point-marker)))
+          (earwig--record-transcribed t "Zelda go to top, Zelda go to line three."))
+        (dolist (call (reverse later))
+          (apply call))
+        (should (= (line-number-at-pos) 3))))))
+
+(ert-deftest earwig-test-voice-undo ()
+  "\"undo\" said again undoes further, rather than redoing."
+  (with-temp-buffer
+    (set-window-buffer nil (current-buffer))
+    (buffer-enable-undo)
+    (insert "One.")
+    (undo-boundary)
+    (insert " Two.")
+    (undo-boundary)
+    (let ((inhibit-message t))
+      (let ((last-command nil)) (earwig-run-command "undo"))
+      (undo-boundary)
+      (should (equal (buffer-string) "One."))
+      (let ((last-command nil)) (earwig-run-command "undo"))
+      (undo-boundary)
+      (should (equal (buffer-string) ""))
+      (let ((last-command nil)) (earwig-run-command "redo"))
+      (should (equal (buffer-string) "One.")))))
+
+(ert-deftest earwig-test-listen-messages ()
+  "Listen mode says whether it's on, and for which wake words."
+  (let (messages)
+    (cl-letf (((symbol-function 'message)
+               (lambda (format &rest args) (push (apply #'format format args) messages))))
+      (let ((earwig-wake-words '("hey jarvis" "zelda")))
+        (earwig-pincer--listening-message))
+      (let ((earwig-wake-words nil))
+        (earwig-pincer--listening-message)))
+    (should (equal (reverse messages)
+                   '("Earwig listen mode on: listening for \"hey jarvis\" or \"zelda\""
+                     "Earwig listen mode on: listening for nothing: set `earwig-wake-words'")))))
+
+(ert-deftest earwig-test-pincer-wake-while-dictating ()
+  "Pincer's wake word while it records dictation cuts it, at its position there."
+  (let ((earwig-pincer--recording 'recording)
+        (earwig--stream-process 'recording)
+        (earwig-pincer--started t)
+        (earwig-pincer--from 32000)
+        woken)
+    (cl-letf (((symbol-function 'earwig-stream-recording-p) #'always)
+              ((symbol-function 'earwig-stream-wake) (lambda (pos) (setq woken pos))))
+      (earwig-pincer--wake 100000)
+      (should (= woken 68000))
+      ;; Not while sox records it
+      (setq woken nil)
+      (let ((earwig--stream-process 'sox))
+        (earwig-pincer--wake 100000))
+      (should-not woken))))
 
 (ert-deftest earwig-test-pincer-start-and-log ()
-  "Starting Pincer says with what command; its events can be logged."
+  "Starting Pincer says with what command; its events are logged."
   (let ((earwig-pincer-command '("earwig-pincer" "--model" "hey jarvis"))
         (earwig-input-device nil)
-        (earwig-pincer-log-events t)
         (earwig-pincer--process nil)
         (earwig-pincer--pending "")
         (messages nil)
         (command nil))
-    (when (get-buffer "*earwig-pincer-events*")
-      (kill-buffer "*earwig-pincer-events*"))
-    (unwind-protect
-        (cl-letf (((symbol-function 'make-process)
-                   (lambda (&rest args) (setq command (plist-get args :command)) nil))
-                  ((symbol-function 'message)
-                   (lambda (format &rest args) (push (apply #'format format args) messages)))
-                  ((symbol-function 'earwig-pincer--event) #'ignore))
-          (earwig-pincer--start)
-          (should (equal command '("earwig-pincer" "--model" "hey jarvis" "--device" "default")))
-          (should (member "Starting Pincer: earwig-pincer --model \"hey jarvis\" --device default"
-                          messages))
-          ;; Whole lines only, as they come
-          (earwig-pincer--filter nil "{\"event\": \"ready\"}\n{\"event\"")
-          (earwig-pincer--filter nil ": \"wake\", \"position\": 8000}\n")
-          (with-current-buffer "*earwig-pincer-events*"
-            (should (string-match-p
-                     (concat "\\`[0-9:.]+ # start: earwig-pincer --model \"hey jarvis\" --device default\n"
-                             "[0-9:.]+ < {\"event\": \"ready\"}\n"
-                             "[0-9:.]+ < {\"event\": \"wake\", \"position\": 8000}\n\\'")
-                     (buffer-string))))
-          ;; Not logged when off
-          (let ((earwig-pincer-log-events nil))
-            (earwig-pincer--filter nil "{\"event\": \"stopped\"}\n"))
-          (with-current-buffer "*earwig-pincer-events*"
-            (should-not (string-match-p "stopped" (buffer-string)))))
-      (when (get-buffer "*earwig-pincer-events*")
-        (kill-buffer "*earwig-pincer-events*")))))
+    (earwig-test-logging
+     (cl-letf (((symbol-function 'make-process)
+                (lambda (&rest args) (setq command (plist-get args :command)) nil))
+               ((symbol-function 'message)
+                (lambda (format &rest args) (push (apply #'format format args) messages)))
+               ((symbol-function 'earwig-pincer--event) #'ignore))
+       (earwig-pincer--start)
+       (should (equal command '("earwig-pincer" "--model" "hey jarvis" "--device" "default")))
+       (should (member "Starting Pincer: earwig-pincer --model \"hey jarvis\" --device default"
+                       messages))
+       ;; Whole lines only, as they come
+       (earwig-pincer--filter nil "{\"event\": \"ready\"}\n{\"event\"")
+       (earwig-pincer--filter nil ": \"wake\", \"position\": 8000}\n")
+       (should (equal (earwig-test-log-lines)
+                      '("pincer    start: earwig-pincer --model \"hey jarvis\" --device default"
+                        "pincer<   {\"event\": \"ready\"}"
+                        "pincer<   {\"event\": \"wake\", \"position\": 8000}")))))))
 
 (defun earwig-test-pincer-program ()
   "Return the Pincer program the tests use, or nil.
@@ -2412,9 +2544,8 @@ earwig-pincer on the path."
          (aiff (expand-file-name "speech.aiff" dir))
          (wav (expand-file-name "speech.wav" dir))
          (earwig-pincer-command (list pincer "--input" wav "--realtime"))
-         (earwig-pincer-wake-words '("hey jarvis"))
-         (earwig-pincer-command-pause 0.8)
-         (earwig-command-auto-stop nil)
+         (earwig-wake-words '("hey jarvis"))
+         (earwig-command-pause 0.8)
          (earwig-command-preview t)
          (earwig-input-device "default")
          (inhibit-message t)
@@ -2545,7 +2676,7 @@ the speech server or Pincer."
 (ert-deftest earwig-test-pincer-recorder-command ()
   "The `pincer' recorder records a command started with a key."
   (earwig-test-with-pincer-recording "[[slnc 1000]] Go to top. [[slnc 5000]]"
-    (let ((earwig-command-auto-stop 0.8)
+    (let ((earwig-command-pause 0.8)
           (earwig-command-preview t))
       (insert "One\nTwo")
       (earwig--toggle-recording 'command)
@@ -2554,6 +2685,26 @@ the speech server or Pincer."
       (earwig-test-wait 30 "The command didn't run" (lambda () (= (point) 1)))
       ;; Stopped at the pause, not when the file ran out
       (should (process-live-p earwig-pincer--process)))))
+
+(ert-deftest earwig-test-listen-while-dictating ()
+  "Pincer's wake word gives a command while dictating, said without a pause."
+  (earwig-test-with-pincer-recording
+      "[[slnc 1000]] This is the first sentence. Hey Jarvis, go to top. [[slnc 2500]] Before that. [[slnc 2500]]"
+    (let* ((earwig-streaming t)
+           (earwig-listen-mode t)
+           (earwig-wake-words '("hey jarvis"))
+           (earwig--mode 'dictate)
+           (woken nil)
+           (record (lambda (pos) (push pos woken))))
+      (advice-add 'earwig-stream-wake :before record)
+      (unwind-protect
+          (progn
+            (earwig--toggle-recording 'dictate)
+            (earwig-test-wait 60 "Streaming didn't finish" (lambda () (not earwig--stream-dir)))
+            (should (= (length woken) 1))
+            (should (string-match-p
+                     "\\`Before that\\. *This is the first sentence\\.\\'" (buffer-string))))
+        (advice-remove 'earwig-stream-wake record)))))
 
 (defvar evil-local-mode)
 (defvar evil-move-cursor-back)
@@ -2683,6 +2834,326 @@ the speech server or Pincer."
        (earwig--stream-insert "Three." 200)
        (should (equal (buffer-string) "One. Three."))
        (should (equal (nth 2 earwig--last-dictation) " Three."))))))
+
+(defmacro earwig-test-stream-audio (&rest body)
+  "Run BODY streaming, with `earwig-test-say' appending audio and measuring it.
+Segments sent to the server are recorded in `earwig-test-sent' instead,
+and functions run later in `earwig-test-later'."
+  (declare (indent 0))
+  `(earwig-test-streaming
+    (let ((earwig-stream-provisional t)
+          (earwig-stream-speech-onset 0.03)
+          (earwig-stream-noise-floor 10)
+          (earwig-stream-speech-ratio 3.0)
+          (earwig-stream-max-segment nil)
+          (earwig-wake-word-commands t)
+          (earwig-test-sent nil)
+          (earwig-test-later nil))
+      (cl-letf (((symbol-function 'earwig--stream-request)
+                 (lambda (file _callback &optional _label)
+                   (unless (equal (file-name-nondirectory file) "provisional.wav")
+                     (push file earwig-test-sent))))
+                ((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args)
+                   (push (cons function args) earwig-test-later))))
+        ,@body))))
+
+(defvar earwig-test-sent nil "Files sent to the server, in `earwig-test-stream-audio'.")
+(defvar earwig-test-later nil "Functions run later, in `earwig-test-stream-audio'.")
+
+(defun earwig-test-say (&rest runs)
+  "Append RUNS of frames, as for `earwig-test-frames', and measure them."
+  (let ((coding-system-for-write 'no-conversion))
+    (write-region (apply #'earwig-test-frames runs) nil (earwig--stream-raw) t 'silent))
+  (earwig--stream-measure))
+
+(defun earwig-test-run-later ()
+  "Run the functions `earwig-test-later' holds, oldest first."
+  (let ((later (reverse earwig-test-later)))
+    (setq earwig-test-later nil)
+    (dolist (call later)
+      (apply call))))
+
+(ert-deftest earwig-test-stream-command-ends-at-pause ()
+  "A command found by its wake word ends at the command pause once complete."
+  (with-temp-buffer
+    (set-window-buffer nil (current-buffer))
+    (insert "One two three")
+    (earwig-test-stream-audio
+      (let ((earwig-command-pause 0.6)
+            (earwig-dictation-pause 1.5)
+            (earwig-wake-word-commands-end-at-pause t))
+        (earwig-test-say '(20 . 20) '(30 . 3000))
+        ;; Its provisional text, of all the speech
+        (earwig--stream-show-provisional "Okay, delete last word." 0 earwig--stream-read)
+        (should (eq earwig--command-heard t))
+        (earwig-test-say '(25 . 20))
+        ;; Cut after 0.6 s, in the middle of the pause, and run as heard,
+        ;; not sent to the server
+        (should (= earwig--stream-segment-start (* 60 960)))
+        (should-not earwig-test-sent)
+        (earwig-test-run-later)
+        (should (equal (buffer-string) "One two"))
+        ;; Not while it isn't complete: it ends as dictation then
+        (setq earwig--stream-segment-start earwig--stream-read)
+        (earwig-test-say '(30 . 3000))
+        (earwig--stream-show-provisional "Okay, go to line" earwig--stream-segment-start
+                                         earwig--stream-read)
+        (let ((start earwig--stream-segment-start))
+          (earwig-test-say '(25 . 20))
+          (should (= earwig--stream-segment-start start))
+          (earwig-test-say '(30 . 20))
+          (should (> earwig--stream-segment-start start)))
+        (should (= (length earwig-test-sent) 1))
+        ;; Nor with the setting off
+        (let ((earwig-wake-word-commands-end-at-pause nil))
+          (setq earwig--stream-segment-start earwig--stream-read
+                earwig-test-sent nil)
+          (earwig-test-say '(30 . 3000))
+          (earwig--stream-show-provisional "Okay, go to top." earwig--stream-segment-start
+                                           earwig--stream-read)
+          (let ((start earwig--stream-segment-start))
+            (earwig-test-say '(25 . 20))
+            (should (= earwig--stream-segment-start start))))))))
+
+(ert-deftest earwig-test-stream-wake ()
+  "Pincer's wake word cuts the dictation at the pause before it."
+  (with-temp-buffer
+    (set-window-buffer nil (current-buffer))
+    (earwig-test-stream-audio
+      (let ((earwig-command-pause 0.6)
+            (earwig-unfinished-command-pause 2.0)
+            (earwig-dictation-pause 0.6)
+            (earwig-wake-word-keeps-provisional-text t)
+            (earwig-wake-words '("hey jarvis")))
+        ;; Dictation, a pause of 0.3 s, and the wake word: heard at frame 95
+        (earwig-test-say '(20 . 20) '(40 . 3000))
+        (earwig--stream-show-provisional "This is it." 0 earwig--stream-read)
+        (earwig-test-say '(10 . 30) '(25 . 3000))
+        ;; The pause was too short to cut it
+        (should (= earwig--stream-segment-start 0))
+        (earwig-stream-wake (* 95 960))
+        ;; Cut in the middle of the pause
+        (should (= earwig--stream-segment-start 62400))
+        (should (equal earwig--stream-commands '((62400 . command))))
+        ;; The dictation before went in as shown
+        (should-not earwig-test-sent)
+        (should (equal (buffer-string) "This is it."))
+        (should (eq earwig--command-heard t))
+        ;; The command, with what's said after it, isn't ended by the
+        ;; dictation pause
+        (earwig-test-say '(10 . 3000) '(15 . 20))
+        (should (= earwig--stream-segment-start 62400))
+        (earwig--stream-show-provisional "Hey Jarvis, go to top." earwig--stream-segment-start
+                                         earwig--stream-read)
+        (should (equal (substring-no-properties
+                        (overlay-get earwig--stream-overlay 'before-string))
+                       " ▶ go to top"))
+        (earwig-test-say '(10 . 20))
+        (should (> earwig--stream-segment-start 62400))
+        (should-not earwig--stream-commands)
+        (should-not earwig-test-sent)
+        (earwig-test-run-later)
+        (should (= (point) 1))
+        ;; After it, dictation again
+        (should-not (earwig--stream-command-segment-p))))))
+
+(ert-deftest earwig-test-stream-wake-no-pause ()
+  "Said without a pause, the wake word makes the whole segment the command.
+Its text is split at the wake word, rather than its audio in the
+middle of speech."
+  (with-temp-buffer
+    (set-window-buffer nil (current-buffer))
+    (earwig-test-stream-audio
+      (let ((earwig-command-pause 0.6)
+            (earwig-wake-words '("hey jarvis"))
+            (earwig-recording-icon "D")
+            (earwig-command-icon "C"))
+        (earwig-test-say '(20 . 20) '(40 . 3000) '(3 . 30) '(25 . 3000))
+        (earwig--stream-show-provisional "This is it" 0 (* 60 960))
+        (earwig-stream-wake (* 88 960))
+        (should (= earwig--stream-segment-start 0))
+        (should (equal earwig--stream-commands '((0 . command))))
+        ;; Its dictation still shows, the command's mark after it
+        (should (equal (substring-no-properties
+                        (overlay-get earwig--stream-overlay 'before-string))
+                       "D This is it C"))
+        (earwig-test-say '(10 . 3000))
+        (earwig--stream-show-provisional "This is it, hey Jarvis, go to top." 0
+                                         earwig--stream-read)
+        (should (equal (substring-no-properties
+                        (overlay-get earwig--stream-overlay 'before-string))
+                       "D This is it. C go to top"))
+        (earwig-test-say '(25 . 20))
+        (should-not earwig-test-sent)
+        (should (equal (buffer-string) "This is it."))
+        (earwig-test-run-later)
+        (should (= (point) 1))))))
+
+(ert-deftest earwig-test-stream-wake-transcribed-again ()
+  "The dictation before the wake word is transcribed if its text lags."
+  (with-temp-buffer
+    (set-window-buffer nil (current-buffer))
+    (earwig-test-stream-audio
+      (let ((earwig-wake-word-keeps-provisional-text t)
+            (earwig-unfinished-command-pause 1.0))
+        (earwig-test-say '(20 . 20) '(40 . 3000))
+        ;; Provisional text of only part of the speech
+        (earwig--stream-show-provisional "This is" 0 (* 40 960))
+        (earwig-test-say '(10 . 30) '(25 . 3000))
+        (earwig-stream-wake (* 95 960))
+        (should (= (length earwig-test-sent) 1))
+        (should (equal (buffer-string) ""))
+        ;; Nor with the setting off, however much it covers
+        (let ((earwig-wake-word-keeps-provisional-text nil)
+              (earwig-test-sent nil))
+          (setq earwig--stream-commands nil)
+          (earwig-test-say '(40 . 20) '(40 . 3000))
+          (earwig--stream-show-provisional "More." earwig--stream-segment-start
+                                           earwig--stream-read)
+          (earwig-test-say '(10 . 30) '(25 . 3000))
+          (earwig-stream-wake earwig--stream-read)
+          (should (= (length earwig-test-sent) 1))
+          (should (equal (buffer-string) "")))))))
+
+(ert-deftest earwig-test-stream-wake-cut ()
+  "The cut for the wake word is at a pause before it, or the segment's start."
+  (earwig-test-streaming
+   (let ((earwig-stream-noise-floor 10)
+         (earwig-stream-speech-ratio 3.0)
+         (pos (* 100 960)))
+     (cl-flet ((levels (&rest runs)
+                 ;; Newest first, as (FRAMES . LEVEL)
+                 (setq earwig--stream-levels
+                       (apply #'append (mapcar (lambda (run) (make-list (car run) (cdr run)))
+                                               runs)))))
+       (setq earwig--stream-read pos
+             earwig--stream-segment-start 0)
+       ;; In the middle of a pause of 0.3 s; the oldest frames are quiet,
+       ;; for the noise level
+       (levels '(30 . 3000) '(10 . 20) '(40 . 3000) '(20 . 20))
+       (should (= (earwig--stream-wake-cut pos) 62400))
+       ;; Not one of 0.15 s, the segment's start then
+       (levels '(30 . 3000) '(5 . 20) '(45 . 3000) '(20 . 20))
+       (should (= (earwig--stream-wake-cut pos) 0))
+       ;; Nor one where the wake word may be
+       (levels '(5 . 3000) '(10 . 20) '(65 . 3000) '(20 . 20))
+       (should (= (earwig--stream-wake-cut pos) 0))
+       ;; Quiet back to the segment's start: nothing said before
+       (levels '(60 . 3000) '(40 . 20))
+       (should (= (earwig--stream-wake-cut pos) 0))
+       (setq earwig--stream-segment-start (* 30 960))
+       (should (= (earwig--stream-wake-cut pos) (* 30 960)))))))
+
+(ert-deftest earwig-test-stream-woken-split ()
+  "The command after Pincer's wake word, however the wake word was transcribed."
+  (let ((earwig-wake-words '("zelda")))
+    (dolist (case '(("This is a test, Zelda. Delete last word." "This is a test." . "Delete last word.")
+                    ;; Heard as something else that sounds like it
+                    ("This is a test cell to delete last word." "This is a test" . "delete last word.")
+                    ("Sell the go to top." "" . "go to top.")
+                    ("Selda, go to top, never mind." "" . "go to top, never mind.")
+                    ;; Not like it: it stays with the dictation
+                    ("This is a test louder go to top." "This is a test louder" . "go to top.")))
+      (should (equal (earwig--stream-woken-split (car case)) (cdr case))))
+    (should-not (earwig--stream-woken-split "Banana split."))
+    (should (equal (earwig--sound-key "Zelda") "slt"))
+    (should (equal (earwig--sound-key "sell the") "slt")))
+  (should (equal (let ((earwig-wake-words '("hey jarvis")))
+                   (earwig--split-at-wake-words "go to line hey jarvis go to top, hey Jarvis"))
+                 '("go to line" "go to top,"))))
+
+(ert-deftest earwig-test-stream-woken-transcribed ()
+  "What's before Pincer's wake word is dictation; the rest must be a command."
+  (with-temp-buffer
+    (set-window-buffer nil (current-buffer))
+    (insert "Start.")
+    (earwig-test-stream-audio
+      (let ((earwig-wake-words '("hey jarvis"))
+            messages)
+        (cl-letf (((symbol-function 'message)
+                   (lambda (format &rest args)
+                     (when format (push (apply #'format format args) messages)))))
+          (setq earwig--stream-commands '((0 . command) (100 . command) (200 . if-complete)
+                                          (300 . drop) (400 . command) (500 . command))
+                earwig--stream-segment-start 600)
+          (earwig--stream-transcribed t "So that's it, hey Jarvis, go to top." 0)
+          (should (equal (buffer-string) "Start. So that's it."))
+          (earwig-test-run-later)
+          (should (= (point) 1))
+          ;; Not a command: it says so, rather than going in
+          (earwig--stream-transcribed t "Hey Jarvis, banana." 100)
+          ;; Said again before it was complete
+          (earwig--stream-transcribed t "Hey Jarvis, go to line" 200)
+          (earwig--stream-transcribed t "Hey Jarvis, go to top" 300)
+          ;; The wake word not transcribed as such, nor a command after it
+          (earwig--stream-transcribed t "Hey Travis." 400)
+          (should (equal (buffer-string) "Start. So that's it."))
+          (should-not earwig-test-later)
+          ;; Said again in the same segment
+          (goto-char (point-max))
+          (earwig--stream-transcribed t "Hey Jarvis, go to line, hey Jarvis, go to top." 500)
+          (earwig-test-run-later)
+          (should (= (point) 1))
+          (should-not earwig--stream-commands)
+          (should (equal (reverse (remove "Mark set" messages))
+                         '("No voice command for \"banana\""
+                           "Voice command dropped, not complete: go to line"
+                           "Voice command dropped: go to top"
+                           "No voice command for \"Hey Travis\""
+                           "Voice command dropped, not complete: go to line"))))))))
+
+(ert-deftest earwig-test-stream-wake-again ()
+  "The wake word said again during a command starts the next one."
+  (with-temp-buffer
+    (set-window-buffer nil (current-buffer))
+    (earwig-test-stream-audio
+      (let ((earwig-wake-words '("hey jarvis"))
+            (earwig-unfinished-command-pause 3.0))
+        (earwig-test-say '(20 . 20) '(30 . 3000))
+        ;; Nothing said before it: the whole segment is the command
+        (earwig-stream-wake (* 50 960))
+        (should (equal earwig--stream-commands '((0 . command))))
+        (should-not earwig--stream-queue)
+        ;; Said again after a pause: cut there
+        (earwig-test-say '(10 . 30) '(40 . 3000))
+        (dolist (case '((next-command . if-complete) (start-over . drop)))
+          (let ((earwig-repeated-wake-word (car case))
+                (earwig--stream-commands '((0 . command)))
+                (earwig--stream-segment-start 0)
+                (earwig-test-sent nil))
+            (earwig-stream-wake (* 100 960))
+            (should (equal earwig--stream-commands `((52800 . command) (0 . ,(cdr case)))))
+            ;; Sent for its final text, as its provisional text has none
+            (should (= (length earwig-test-sent) 1))))
+        ;; Without a pause, it stays one, split by its text
+        (let ((earwig--stream-commands '((52800 . command)))
+              (earwig--stream-segment-start 52800)
+              (earwig-test-sent nil))
+          (earwig-test-say '(3 . 30) '(40 . 3000))
+          (earwig-stream-wake earwig--stream-read)
+          (should (equal earwig--stream-commands '((52800 . command))))
+          (should-not earwig-test-sent))))))
+
+(ert-deftest earwig-test-log-stream ()
+  "The log says where dictation was cut and why, and what the wake word did."
+  (with-temp-buffer
+    (set-window-buffer nil (current-buffer))
+    (earwig-test-logging
+     (earwig-test-stream-audio
+       (let ((earwig-dictation-pause 0.6)
+             (earwig-wake-words '("zelda")))
+         (earwig-test-say '(20 . 20) '(30 . 3000) '(25 . 20))
+         (earwig-test-say '(30 . 3000) '(3 . 30) '(20 . 3000))
+         (earwig-stream-wake earwig--stream-read)
+         (cl-letf (((symbol-function 'message) #'ignore))
+           (earwig--stream-transcribed t "Some more cell to go to top." earwig--stream-segment-start))
+         (should (equal (earwig-test-log-lines "segment")
+                        '("cut [0.00s–1.80s] at a pause, noise 20")))
+         (should (string-match-p "\\`@3\\.84s, the segment being spoken from @1\\.80s, measured to @3\\.84s: no pause before it, the whole segment is the command\\'"
+                                 (car (earwig-test-log-lines "wake"))))
+         (should (equal (earwig-test-log-lines "split")
+                        '("no wake word heard: at the commands it ends with, dropping \"cell to\", which sounds like it; dictation \"Some more\", commands (\"go to top.\")"))))))))
 
 (ert-deftest earwig-test-stream-command-moves ()
   "What's said after a command goes where it left point, even while it ran."
@@ -2935,7 +3406,7 @@ several finished requests at once and run their callbacks in any order."
     (earwig-test-streaming
      (let (sent)
        (cl-letf (((symbol-function 'earwig-server-transcribe)
-                  (lambda (file callback)
+                  (lambda (file callback &optional _label)
                     (push (cons file callback) sent)
                     ;; A request that has exited, its callback not run yet
                     (let ((process (make-process :name "earwig-test" :command '("true")

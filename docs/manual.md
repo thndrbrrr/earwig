@@ -115,7 +115,7 @@ macOS asks for microphone access the first time Emacs records. If it was denied,
       earwig-hold-typing-repeats  3)
 
 ;; Streaming: pauses and speech depend on the microphone, the rest on the CPU
-(setq earwig-stream-pause                1.5
+(setq earwig-dictation-pause             1.5
       earwig-stream-speech-ratio         3.0
       earwig-stream-speech-onset         0.15  ; shorter sounds are noise
       earwig-stream-noise-floor          10
@@ -139,7 +139,7 @@ On macOS it reads the press-and-hold setting of the app `org.gnu.Emacs`; for an 
 
 ### How a command is recognized
 
-- Tap Cmd-f (or keypad Enter), or use another key with the mode `command`, and say the command. Pause when you're done, or tap it again: recording stops after `earwig-command-auto-stop` seconds of silence (1.5) once what you've said is a complete command (or ends with "cancel"). Set it to nil to stop commands only with the key. Earwig transcribes it as you speak to tell. After "go to line" without its number, or a chain ending in "and then", it waits longer, `earwig-command-auto-stop-incomplete` (3 s), before giving up. Commands that take any words, like "select WORDS", are complete after the first word, so don't pause inside those. All of what you say has to read as commands; case and punctuation don't matter, and if it doesn't read as said, your `earwig-corrections-commands` are applied and it's tried again (all your corrections apply to every transcription anyway). "what can I say" lists the commands.
+- Tap Cmd-f (or keypad Enter), or use another key with the mode `command`, and say the command. Pause when you're done, or tap it again: recording stops after `earwig-command-pause` seconds of silence (1.5) once what you've said is a complete command (or ends with "cancel"). To stop commands only with the key, set `earwig-command-key-stops-at-pause` to nil. Earwig transcribes it as you speak to tell, and runs it as heard then. After "go to line" without its number, or a chain ending in "and then", it waits longer, `earwig-unfinished-command-pause` (3 s), before giving up. The same pauses end a command after a wake word, outside dictation or in it. Commands that take any words, like "select WORDS", are complete after the first word, so don't pause inside those. All of what you say has to read as commands; case and punctuation don't matter, and if it doesn't read as said, your `earwig-corrections-commands` are applied and it's tried again (all your corrections apply to every transcription anyway). "what can I say" lists the commands.
 - While dictating, say "okay" and the command: see [Commands while dictating](#commands-while-dictating).
 - Each change a command makes is one undo step.
 - Say several commands in a row and they run one after another: "select last sentence cut that go to bottom paste". "and then" between them is optional: "format bold results and then select the last sentence and then cut that". Each is its own undo step, and the chain stops at one that fails. A command that prompts, like "search", waits for you to answer before the next one runs. See [Several commands in a row](#several-commands-in-a-row) for how Earwig tells where one ends.
@@ -167,15 +167,16 @@ You never have to leave dictation to give a command, or a chain of them. While y
 
 > …and that's the plan. *(pause)* Okay, select last sentence and then format bold. *(pause)* Next, the budget…
 
-- This works at every pause (`earwig-stream-pause`, 1.5 s by default), with any dictation key, tapped or held. It needs streaming; without it, only a recording that starts with "okay" is a command.
+- This works at every pause (`earwig-dictation-pause`, 1.5 s by default), with any dictation key, tapped or held. It needs streaming; without it, only a recording that starts with "okay" is a command. With Pincer listening and recording, there's no need to pause first: see [Commands after a wake word](#commands-after-a-wake-word-experimental).
+- Once what you've said after "okay" is a complete command, it runs after `earwig-command-pause` (1.5 s) of silence, as its provisional text has it, without being transcribed again. While it isn't, it ends as dictation does, after `earwig-dictation-pause`, as "okay" may just begin a sentence. `(setopt earwig-wake-word-commands-end-at-pause nil)` has commands end as dictation always, transcribed once more before they run: a little slower, but heard more carefully.
 - As soon as Earwig hears "okay", the provisional text turns the color of CMD in the mode line (blue) instead of grey, so you can tell a command is coming, and the mode line shows ▶ CMD until the command has run and dictation carries on with ● REC. `earwig-provisional-command` gives the text a face of its own.
 - Provisional text starts with the icon from the mode line, where it will go: the red ● of REC for dictation, the blue ▶ of CMD for a command. For a command, ▶ takes the place of "okay", and goes between the commands, in place of "and then" too: "okay, select last sentence and then cut that" and "okay, select last sentence cut that" both show as "▶ select last sentence ▶ cut that". `earwig-recording-icon`, `earwig-command-icon` and `earwig-provisional-chain-mark` change them, in the mode line too; `earwig-provisional-icons` turns the icons off in provisional text.
 - To keep the buffer for dictation only, show commands in the echo area instead, as with a command key: `(setopt earwig-provisional-command-display 'echo-area)`.
-- If no command matches, what you said is inserted as dictation, "okay" and all.
+- If no command matches, what you said is inserted as dictation, "okay" and all; not after Pincer's wake word, which says so instead.
 - What only writes forward, where you're dictating, needs no "okay": spoken punctuation, "new line", "new paragraph", and in Org and Markdown "new heading" and "new item" (see [Headings and lists](#headings-and-lists-org-and-markdown)). Everything that changes what's already there, moves, or runs something does.
 - Dictation follows point. After "okay, go to top", or after you click somewhere else, what you say next goes there, even mid-sentence. What you'd already said before you moved still goes where you said it, where its provisional text showed. Leaving evil's insert state, which moves point back a character, doesn't count as moving.
 - Each stretch of dictation between commands, or before you move, is one undo step, and it's what "scratch that" takes back.
-- The wake words are in `earwig-wake-words` ("okay" and "ok"). To have a dictation key only ever dictate, turn it off: `(setopt earwig-wake-word-commands nil)`.
+- The wake words are in `earwig-wake-words` ("okay" and "ok"), one or several, each one or more words. With Pincer listening, they're the words of its model instead, see below. To have a dictation key only ever dictate, turn it off: `(setopt earwig-wake-word-commands nil)`.
 
 ### Commands after a wake word (experimental)
 
@@ -186,16 +187,19 @@ With `earwig-listen-mode`, the microphone stays open and a wake word gives a com
 The listening is done by [Pincer](https://github.com/thndrbrrr/earwig-pincer), a helper program that listens for the wake word with openWakeWord, using a few percent of one core. The speech server only transcribes once it hears the wake word. Install it as its README says, then:
 
 ```elisp
-(setopt earwig-pincer-command '("earwig-pincer" "--model" "hey_jarvis"))
+(setopt earwig-pincer-command '("earwig-pincer" "--model" "hey_jarvis")
+        earwig-wake-words '("hey jarvis"))
 (earwig-listen-mode 1)
 ```
 
-- The command is recorded from 1.5 s before the wake word was heard (`earwig-pincer-pre-roll`), so the wake word and what follows are all there however quickly you say them; what was said before the wake word is dropped. `earwig-pincer-wake-words` says how the wake word is transcribed ("hey jarvis" for the `hey_jarvis` model).
-- It's then a command as one given with a command key: shown in the echo area as you say it, and run at the pause after it, once it's complete (`earwig-pincer-command-pause`, 1 s, or `earwig-command-auto-stop` if that's set). C-g cancels it.
-- While Earwig records or transcribes, the wake word does nothing. While dictating, it works as "okay" does, after a pause.
+- `earwig-wake-words` are the wake words, as they're transcribed; set them to the words of Pincer's model, as above. They're the same words that give a command while dictating, so "okay" no longer does then. Earwig doesn't check that they match the model. Turning listen mode on says which words it listens for.
+- Outside dictation, the command is recorded from 1.5 s before the wake word was heard (`earwig-pincer-pre-roll`), so the wake word and what follows are all there however quickly you say them; what was said before the wake word is dropped. It's then a command as one given with a command key: shown in the echo area as you say it, and run at the pause after it, once it's complete (`earwig-command-pause`, or `earwig-unfinished-command-pause` while it isn't). C-g cancels it.
+- While dictating, with Pincer as the recorder (below), the wake word gives a command at any moment, without a pause before it: "…and that's the plan hey Jarvis select last sentence format bold". What you said before the wake word goes in as dictation before the command runs, and the command shows in blue after it, as after "okay". Earwig tells them apart by the wake word in the transcription, so they're transcribed together, as Orukeet hears words best whole and in context. If it hears the wake word as something that sounds like it, as "sell the" for "Zelda", the commands the text ends with are the command, and the sound-alike is dropped. With a short pause before the wake word, the dictation is cut there and goes in at once, as its provisional text shows it if that covers all of it (`earwig-wake-word-keeps-provisional-text`). It runs at the pause after it, once complete, as heard; if it isn't complete, it waits `earwig-unfinished-command-pause` before trying. Anything that isn't a command after the wake word isn't dictated: Earwig says so. If the dictation before ran into the wake word, what's caught with the command still goes in as dictation.
+- Say the wake word again during such a command to start the next one: the command said so far runs if it's complete and is dropped if it isn't, so you can start over after a slip. With `(setopt earwig-repeated-wake-word 'start-over)` it's always dropped.
+- With sox or ffmpeg recording, the wake word while dictating works as "okay" does, after a pause. While Earwig transcribes a recording that has stopped, it does nothing.
 - The microphone is open all the time, as the orange indicator on macOS shows. Turning `earwig-listen-mode` off closes it, unless Pincer is also the recorder (below); turning `earwig-mode` off always does, and turns listen mode off too. Turning listen mode on turns `earwig-mode` on. Audio stays on your computer. A Bluetooth headset switches to its low-quality call profile while the microphone is open.
 - The pre-trained models are English phrases such as "hey Jarvis" and "alexa"; a wake word of your own needs a model trained for it (`--model path/to/model.onnx`).
-- Starting Pincer says so in the echo area, with the whole command it runs. `M-x earwig-pincer-log` shows what it writes to stderr; with `(setq earwig-pincer-log-events t)`, the JSON lines Earwig and Pincer send each other are logged to *earwig-pincer-events*, with the time: `<` for Pincer's, `>` for Earwig's, and `#` for the command it was started with and how it exited.
+- Starting Pincer says so in the echo area, with the whole command it runs. `M-x earwig-pincer-log` shows what it writes to stderr; with `earwig-log`, the JSON lines Earwig and Pincer send each other are in the log, see [The log](#the-log).
 
 #### Recording through Pincer (experimental)
 
@@ -509,7 +513,34 @@ Command corrections apply only when the command as said matches none, so "find n
 
 For a word misheard in a command of your own, an alternative in its pattern is better still, as Earwig's own "mark done" accepts "dunn": `("mark" (| "done" "dunn"))`.
 
-To see which words are misheard again and again, set `(setq earwig-log-transcriptions t)`: each transcription is logged to *Messages*, as Orukeet wrote it and as Earwig made of it.
+To see which words are misheard again and again, turn on [the log](#the-log): it has each transcription, as Orukeet wrote it and as Earwig made of it.
+
+## The log
+
+To find out why something was misheard, a command was missed, or the wake word was handled wrongly, turn on the log, and `M-x earwig-show-log` to see it:
+
+```elisp
+(setopt earwig-log t)
+```
+
+Each line in *earwig-log* has the time and what it's about. Positions are seconds from the start of the recording ("@3.21s"), and a stretch of it is "[1.20s–3.51s]".
+
+| Line | What it has |
+|------|-------------|
+| `pincer<`, `pincer>`, `pincer` | Pincer's events as it wrote them (a `wake` with its score and position), what Earwig sent it, and Pincer starting and exiting |
+| `record` | A recording starting (dictation or command, by key or wake word, the recorder, where it goes), the microphone going live, and stopping: how much audio, and for a command, whether it was complete or unfinished after how long a pause |
+| `orukeet` | Each request to the speech server, what for (a segment, provisional text, a command's preview, a whole recording), how much audio, how long it took, and its answer word for word, before any cleanup |
+| `cleanup` | Each step of the cleanup that changed that answer, before and after: filler words dropped, each correction applied (`earwig-corrections`, and `earwig-corrections-commands` with whether the command needed them), spoken punctuation and formatting, what was taken from the text before it ("tomorrow." losing its period to a "comma"), fitting it to where it goes (capitals, spaces, a period dropped), and a correction across two segments |
+| `segment` | Streaming dictation cutting a segment, where and why (a pause, the longest segment, point moving, a command ending, the wake word, recording stopping), the background noise level then, and whether it went in as its provisional text; segments dropped, and where point moved to |
+| `wake` | The wake word: where Pincer heard it in the dictation, how far Earwig had measured, and whether it cut at a pause before it or made the whole segment the command; or why it was ignored |
+| `split` | How a command after the wake word was told from the dictation before it: at the wake word, at the commands it ends with (and a sound-alike dropped), or not at all; the dictation and the commands |
+| `heard` | Each transcription acted on, as Orukeet wrote it, and what it became in the end: the dictation as inserted, a command, or nothing |
+| `command` | A command as its provisional text shows it, faces and all, where it ran, and what it said |
+| `message` | What Earwig said about a command: cancelled, dropped, no voice command |
+
+So for a segment of dictation there's an `orukeet` line when its transcription comes back, a `cleanup` line for each step that changed it, and a `heard` line with the end result. Provisional text and command previews get an `orukeet` line, but not their cleanup: it's the same as for the text that goes in.
+
+The log keeps its last 2 MB or so.
 
 ## The speech server
 
@@ -630,23 +661,25 @@ All options live under `M-x customize-group RET earwig RET`, the speech server, 
 - **`earwig-audio-driver`**, **`earwig-pulse-latency`** – The driver sox records through (`auto`: coreaudio on macOS), and with PulseAudio, how much audio it hands sox at a time.
 - **`earwig-toggle-keys`**, **`earwig-correct-keys`** – The keys of `earwig-mode` that toggle recording when tapped, and those that correct.
 - **`earwig-push-to-talk`**, **`earwig-push-to-talk-keys`** – Whether there's push-to-talk (off by default), and the keys that record while held (the space bar).
-- **`earwig-wake-word-commands`**, **`earwig-wake-words`** – Whether you can give commands while dictating by saying "okay" first (on by default), and the words for that.
+- **`earwig-wake-word-commands`**, **`earwig-wake-words`** – Whether you can give commands while dictating by saying "okay" first (on by default), and the words for that, also those Pincer listens for.
+- **`earwig-wake-word-commands-end-at-pause`** – Whether a command after "okay" while dictating runs at `earwig-command-pause` once complete, as heard (on), or ends as dictation and is transcribed again.
+- **`earwig-wake-word-keeps-provisional-text`**, **`earwig-repeated-wake-word`** – With Pincer listening while you dictate: whether the dictation the wake word interrupts goes in as its provisional text showed it (on), and what saying the wake word again during a command does (`next-command`, or `start-over`).
 - **`earwig-chain-words`** – Words that can go between commands (`"and then"`). Commands are found without them too; with them, words that can't be checked, as "search" takes, end there. See [Several commands in a row](#several-commands-in-a-row).
 - **`earwig-cancel-words`** – Words that, said last, cancel a command (`"cancel"`, `"never mind"`).
-- **`earwig-command-auto-stop`**, **`earwig-command-auto-stop-incomplete`** – Seconds of silence after a complete voice command started with a tap that stop its recording (1.5; nil: only the key stops it), and after what isn't a command yet (3; nil to wait for the key).
+- **`earwig-command-pause`**, **`earwig-unfinished-command-pause`** – Seconds of silence after a complete voice command before it runs, however it was started (1.5), and that end one that isn't complete yet (3; nil to wait for the key).
+- **`earwig-command-key-stops-at-pause`** – Whether a command started with a tap of a command key stops at the pause after it (on; nil: only the key stops it).
+- **`earwig-dictation-pause`** – Seconds of silence that end a stretch of dictation (1.5).
 - **`earwig-command-preview`**, **`earwig-provisional-command-display`** – Whether a command said with a command key shows in the echo area as you say it (on), and whether a command given while dictating shows in the buffer (the default) or the echo area.
 - **`earwig-flash`**, **`earwig-flash-duration`** – Whether the text a command put in, moved or wrapped flashes, so you see where it went (on), and for how long (1.5 s). "where is TARGET" flashes either way.
 - **`earwig-dash`** – The dash "wrap TARGET in dashes" puts on either side, with its spaces (`" — "`).
 - **`earwig-corrections`**, **`earwig-corrections-commands`**, **`earwig-corrections-learned`** – "Wrong => right" corrections: for every transcription, for commands only, and those made with Cmd-e.
 - **`earwig-filler-words`**, **`earwig-keep-capitalized`** – Words dropped from dictation, and words that keep their capital mid-sentence.
 - **`earwig-format-dictation`**, **`earwig-spoken-format`**, **`earwig-literal-word`** – Spoken punctuation in dictation.
-- **`earwig-log-transcriptions`** – Log each transcription to *Messages*, as Orukeet wrote it and what Earwig made of it (off by default): to see which words are misheard again and again, for `earwig-corrections`, or where spoken punctuation goes wrong.
-- **`earwig-log-commands`** – Log each voice command to *Messages* as it runs, said with a command key or after "okay" (off by default): as its provisional text shows, "▶ select last sentence ▶ cut that", with what isn't a command in grey and a cancelled one struck through.
+- **`earwig-log`** – Log what Earwig hears and does to *earwig-log* (off by default): transcriptions, commands, segments, the wake word and Pincer's events, each with the time. See [The log](#the-log).
 - **`earwig-curly-quotes`** – Whether dictated quotes and apostrophes are curly: where `electric-quote-mode` is on (the default), everywhere, or nowhere.
 - **`earwig-dictation-structure`** – Headings and list items said in dictation.
 - **`earwig-format-markup`** – The markup "format STYLE" uses in each major mode.
-- **`earwig-streaming`** and **`earwig-stream-*`** – Streaming (on by default; needs sox, and with ffmpeg dictation is transcribed when you stop, as *Messages* notes once): the pause that ends a segment (`earwig-stream-pause`), how loud and how long a sound must be to count as speech (`-speech-ratio`, `-speech-onset`, `-noise-floor`), provisional text and how much of the server's time it may take (`-provisional`, `-provisional-interval`, `-provisional-share`), the longest segment (`-max-segment`), and typing over provisional text (`-flush-on-key`, `-flush-punctuation`).
-- **`earwig-pincer-log-events`** – Log the JSON lines Earwig and Pincer send each other to *earwig-pincer-events* (off by default).
+- **`earwig-streaming`** and **`earwig-stream-*`** – Streaming (on by default; needs sox, and with ffmpeg dictation is transcribed when you stop, as *Messages* notes once): how loud and how long a sound must be to count as speech (`-speech-ratio`, `-speech-onset`, `-noise-floor`), provisional text and how much of the server's time it may take (`-provisional`, `-provisional-interval`, `-provisional-share`), the longest segment (`-max-segment`), and typing over provisional text (`-flush-on-key`, `-flush-punctuation`).
 - **`earwig-hold-*`** – Telling a held key, push-to-talk, from a tap; `earwig-hold-debug` logs the key repeat intervals.
 - **Faces and icons** – `earwig-mode-line-recording` (red), `earwig-mode-line-command` (blue) and `earwig-mode-line-transcribing` for REC, CMD and STT in the mode line, and their icons ● and ▶ (`earwig-recording-icon`, `earwig-command-icon`), also before provisional text (`earwig-provisional-icons`), with `earwig-provisional-chain-mark` between chained commands; `earwig-provisional` for provisional text, `earwig-provisional-command` for that of a command said while dictating (unset, it takes the color of CMD), and `earwig-flash` for text that flashes.
 - **`earwig-speech-server-base-url`**, **`earwig-speech-server-model`** – The address of the speech server Earwig sends recordings to, and the model name it asks for.
@@ -665,20 +698,21 @@ Run `M-x earwig-check-setup` first. Beyond what it finds:
 | Recording shows, but no text ever comes                              | The server isn't running: `M-x earwig-speech-server-start`; `M-x earwig-speech-server-log` shows its output                                                                                                                        |
 | The first words are cut off                                          | ffmpeg as the recorder: install sox, or with ffmpeg, wait a second before speaking                                                                                                                                                 |
 | Holding the space bar only types spaces                              | `earwig-push-to-talk` is off, or the key doesn't repeat (press and hold, see [Microphone and keyboard timing](#microphone-and-keyboard-timing)), or repeats more slowly than `earwig-hold-*` expect: set `(setq earwig-hold-debug t)` to log the intervals to *Messages* |
-| A spoken quote, punctuation or command is ignored or comes out wrong | Orukeet may have misheard it, or put punctuation in it: set `(setq earwig-log-transcriptions t)` to log what it wrote to *Messages*, and add a correction for a mishearing that recurs                                              |
+| A spoken quote, punctuation or command is ignored or comes out wrong | Orukeet may have misheard it, or put punctuation in it: turn on `earwig-log` to see what it wrote, and add a correction for a mishearing that recurs                                              |
 | Dictation stops while the key is still held                          | Repeats arrive further apart than `earwig-hold-release-delay`                                                                                                                                                                      |
-| A sentence is split at a pause to think                              | Raise `earwig-stream-pause`                                                                                                                                                                                                        |
+| A sentence is split at a pause to think                              | Raise `earwig-dictation-pause`                                                                                                                                                                                                     |
 | Streaming never ends a segment                                       | Background noise counts as speech: raise `earwig-stream-speech-ratio`, or `earwig-stream-noise-floor` for a microphone with noise suppression                                                                                       |
 | Streaming cuts in the middle of quiet speech                         | Lower `earwig-stream-speech-ratio`                                                                                                                                                                                                 |
 | The first syllable of a short word is lost                           | Lower `earwig-stream-speech-onset`                                                                                                                                                                                                 |
 | The fan runs while you dictate                                       | Each transcription keeps the CPU busy: raise `earwig-stream-provisional-interval`, lower `earwig-stream-provisional-share`, or turn off `earwig-stream-provisional`                                                                 |
 | The same word keeps coming out wrong                                 | Fix it once with Cmd-e; it's remembered in `earwig-corrections-learned`                                                                                                                                                            |
-| A voice command does nothing                                         | It runs once you stop it: pause, or tap Cmd-f again. With `earwig-command-auto-stop` nil, only the key stops it                                                                                                                    |
-| A command runs before you've finished                                | A pause of `earwig-command-auto-stop` after a complete command ends it: say it without pausing, or raise the option. Commands that take any words, like "select WORDS", are complete after the first word                       |
-| A command isn't recognized                                           | "what can I say"; all of what you say has to read as commands, so a word too many makes it fail. Set `(setq earwig-log-commands t)` to see how it was read                                                                         |
+| A voice command does nothing                                         | It runs once you stop it: pause, or tap Cmd-f again. With `earwig-command-key-stops-at-pause` nil, only the key stops it                                                                                                           |
+| A command runs before you've finished                                | A pause of `earwig-command-pause` after a complete command ends it: say it without pausing, or raise the option. Commands that take any words, like "select WORDS", are complete after the first word                           |
+| The wake word, or something that sounds like it, ends up in the dictation | Orukeet heard it as words that don't sound like it, so Earwig can't tell it from dictation: the `split` lines of `earwig-log` show how, and add that to `earwig-wake-words` if it's not a phrase you'd dictate |
+| A command isn't recognized                                           | "what can I say"; all of what you say has to read as commands, so a word too many makes it fail. `earwig-log` shows how it was heard and read                                                                         |
 | Two commands run where you meant one, or the other way round         | Pause between them, or say "and then"; see [Several commands in a row](#several-commands-in-a-row)                                                                                                                                 |
 | A target picks the wrong place                                       | Name it more closely: "the next budget", "budget in this paragraph", "the second sentence with budget"; "where is TARGET" shows what it finds                                                                                     |
-| Pincer won't start, or the wake word does nothing                    | *Messages* shows the command Pincer was started with ("Starting Pincer: …"): try it in a terminal. `M-x earwig-pincer-log` shows what it wrote to stderr; set `(setq earwig-pincer-log-events t)` to log its JSON lines to *earwig-pincer-events* |
+| Pincer won't start, or the wake word does nothing                    | *Messages* shows the command Pincer was started with ("Starting Pincer: …"): try it in a terminal. `M-x earwig-pincer-log` shows what it wrote to stderr; `earwig-log` logs its events, and why a wake word was ignored |
 | `earwig-extra-commands` is no longer used                            | Commands of your own are `phony-defun` forms now: see [Commands of your own](#commands-of-your-own)                                                                                                                                |
 
 ## Source files
@@ -687,6 +721,7 @@ Run `M-x earwig-check-setup` first. Beyond what it finds:
 - `earwig-server.el`: sending recordings to the speech server, and starting and stopping it
 - `earwig-platform.el`: what differs from one operating system to another
 - `earwig-cleanup.el`: fillers, corrections, spoken punctuation, fitting text in
+- `earwig-log.el`: the log of what Earwig hears and does, `earwig-log`
 - `earwig-grammar.el`: voice commands as a phony.el grammar: finding them in what's said and choosing between readings
 - `earwig-phony.el`: what Earwig needs from phony.el that its public API doesn't have yet
 - `earwig-commands.el`, `earwig-edit.el`: spoken commands; `earwig-edit.el` also has the targets

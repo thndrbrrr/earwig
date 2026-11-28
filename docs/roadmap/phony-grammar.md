@@ -409,7 +409,7 @@ The preview already marks boundaries (`▶ select budget ▶ cut that`), and "ca
 
 - **Better auto-stop:**
   - stop as soon as nothing more can follow ("go to top")
-  - wait for `earwig-command-auto-stop-incomplete` only while what's said can still go on
+  - wait for `earwig-unfinished-command-pause` only while what's said can still go on
     ("go to line …")
   - give up early on what can't become a command
   - the preview could show what's expected next ("go to line ▸ N")
